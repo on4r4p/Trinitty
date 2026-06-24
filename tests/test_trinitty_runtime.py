@@ -845,6 +845,29 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertEqual([[{"google_title": "Titre"}]], calls)
 
+    def test_command_ignores_broad_read_results_trigger_in_prompt(self):
+        reset_command_state()
+        calls = []
+        trinitty.Loaded_Actions_Words_Requests = ["dis"]
+        trinitty.Loaded_Read_Results = ["dis * "]
+        trinitty.LAST_DIALOG = ()
+        original_read_results = trinitty.Read_Results
+        trinitty.Read_Results = lambda result_object: calls.append(result_object) or "Titre"
+        try:
+            self.assertFalse(
+                trinitty.Commandes(
+                    "tu m'as dis a propos des trou noir est ce que tu comprends mon probleme"
+                )
+            )
+        finally:
+            trinitty.Read_Results = original_read_results
+
+        self.assertEqual([], calls)
+
+    def test_read_results_handles_empty_tuple(self):
+        reset_command_state()
+        self.assertEqual("", trinitty.Read_Results(()))
+
     def test_command_routes_polite_show_history_request(self):
         reset_command_state()
         calls = []

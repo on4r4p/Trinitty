@@ -147,5 +147,5 @@ F_add_trigger,nouveau*declencheur
 F_add_trigger,activateur*fonction
 F_add_trigger,nouvel*activateur
 F_add_trigger,nouveau*trigger
-F_read_results,[lis{-moi/}/dis{-moi/}/parle{-moi/}] * [{des/les} resultats/ce que tu as trouve/tout ca/]
+F_read_results,[lis{-moi/}/dis{-moi/}/parle{-moi/}] * [{des/les} resultats/ce que tu as trouve/tout ca]
 F_sort_results,par ordre[ chronologique/ ant{é/i}chronologique]

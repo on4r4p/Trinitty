@@ -4907,6 +4907,27 @@ def Command_Classifier_Allows_Command(text):
     return score >= float(globals().get("COMMAND_CLASSIFIER_THRESHOLD", 0.65))
 
 
+def Read_Results_Command_Is_Specific(text):
+    normalized = str(text or "").lower()
+    try:
+        normalized = unidecode(normalized)
+    except Exception as e:
+        Log_Error("Read_Results_Command_Is_Specific", e)
+    normalized = re.sub(r"[^0-9a-zA-ZÀ-ÿ]+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return any(
+        pattern in normalized
+        for pattern in [
+            "resultat",
+            "resultats",
+            "ce que tu as trouve",
+            "ce que vous avez trouve",
+            "tout ca",
+            "tout cela",
+        ]
+    )
+
+
 def Commandes(txt=None,allowed_functions=None,from_function=None):
 
     direct_url = Extract_First_Url(txt)
@@ -4971,6 +4992,11 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
         PRINT("\n-Trinitty:Commandes():Va dans la fonction :%s" % goto)
 
         #Commandes(txt, allowed_functions, "Results_Hub")
+
+        if goto == "F_read_results" and from_function != "Results_Hub":
+            if not Read_Results_Command_Is_Specific(decoded):
+                PRINT("\n-Trinitty:Commandes():F_read_results ignored; trigger is too broad.")
+                return False
 
         if from_function == "Results_Hub":
             return goto
@@ -6895,7 +6921,7 @@ def Result_Text(result_object):
    if result_object is None:
       return ""
 
-   if isinstance(result_object, list):
+   if isinstance(result_object, (list, tuple)):
       text_parts = []
       for item in result_object:
          item_text = Result_Text(item)
@@ -6958,7 +6984,7 @@ def Display_Result(result_object, result_number=None):
 
 def Read_Results(result_object):
 
-   PRINT("\n-Trinitty:Read_Results:object:%s"%result_object)
+   PRINT("\n-Trinitty:Read_Results:object:%s" % (result_object,))
    text = Result_Text(result_object)
    if not text:
       PRINT("\n-Trinitty:Read_Results:no readable text")
