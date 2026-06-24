@@ -1917,6 +1917,61 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertIn("&sort=date&start=1", calls[0])
 
+    def test_clean_wikipedia_search_query_removes_command_noise(self):
+        reset_command_state()
+        self.assertEqual(
+            "albert einstein",
+            trinitty.Clean_Wikipedia_Search_Query(
+                "une recherche sur Albert Einstein sur Wikipédia s'il te plaît"
+            ),
+        )
+
+    def test_wikipedia_uses_clean_direct_search_when_google_title_fails(self):
+        reset_command_state()
+        reset_runtime_queues()
+        calls = []
+
+        original_isolate = trinitty.Isolate_Search
+        original_get_title = trinitty.GetTitleLink
+        original_search = trinitty.wikipedia.search
+        original_summary = trinitty.wikipedia.summary
+        original_set_lang = trinitty.wikipedia.set_lang
+        original_start_record = trinitty.Start_Thread_Record
+        original_tts = trinitty.Text_To_Speech
+        original_google = trinitty.Google
+        original_play = trinitty.Play_Audio_File
+
+        trinitty.Isolate_Search = (
+            lambda _text, _function_name: "une recherche sur albert einstein sur wikipedia s'"
+        )
+        trinitty.GetTitleLink = lambda *_args, **_kwargs: None
+        trinitty.wikipedia.set_lang = lambda lang: calls.append(("set_lang", lang))
+        trinitty.wikipedia.search = lambda query: calls.append(("search", query)) or (
+            ["Albert Einstein"] if query == "albert einstein" else []
+        )
+        trinitty.wikipedia.summary = lambda title, **_kwargs: calls.append(("summary", title)) or "Resume Einstein"
+        trinitty.Start_Thread_Record = lambda: False
+        trinitty.Text_To_Speech = lambda text, stayawake=False: calls.append(("tts", text, stayawake)) or "tts"
+        trinitty.Google = lambda *_args, **_kwargs: calls.append(("google", _args, _kwargs)) or "google"
+        trinitty.Play_Audio_File = lambda *_args, **_kwargs: 0
+        try:
+            self.assertEqual((), trinitty.Wikipedia("wikipedia albert einstein"))
+        finally:
+            trinitty.Isolate_Search = original_isolate
+            trinitty.GetTitleLink = original_get_title
+            trinitty.wikipedia.search = original_search
+            trinitty.wikipedia.summary = original_summary
+            trinitty.wikipedia.set_lang = original_set_lang
+            trinitty.Start_Thread_Record = original_start_record
+            trinitty.Text_To_Speech = original_tts
+            trinitty.Google = original_google
+            trinitty.Play_Audio_File = original_play
+
+        self.assertIn(("search", "albert einstein"), calls)
+        self.assertIn(("summary", "Albert Einstein"), calls)
+        self.assertIn(("tts", "Resume Einstein", True), calls)
+        self.assertNotIn("google", [call[0] for call in calls])
+
     def test_wikipedia_outer_error_falls_back_to_google(self):
         reset_command_state()
         calls = []

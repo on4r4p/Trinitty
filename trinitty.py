@@ -5109,7 +5109,6 @@ def GetTitleLink(txt, site=None):
 
         if len(title_search) == 0:
             PRINT("\n-Trinitty:-Google() no result from google")
-            Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_result_google.wav")
             SearchFallback = True
         else:
             return title_search
@@ -5145,6 +5144,44 @@ def GetTitleLink(txt, site=None):
             return None
 
     return None
+
+
+def Clean_Wikipedia_Search_Query(txt):
+    original = str(txt or "").strip()
+    query = unidecode(original).lower()
+    query = query.replace("’", "'")
+
+    polite_patterns = [
+        r"\bs\s*'?\s*il\s+(te|vous)\s+pla[iî]t\b",
+        r"\b(stp|svp|merci)\b",
+    ]
+    command_patterns = [
+        r"\best[\s-]*ce\s+que\b",
+        r"\btu\s+peux\b",
+        r"\bpouvez\s+vous\b",
+        r"\bpeux\s+tu\b",
+        r"\bfais\s+(moi\s+)?une\s+recherche\b",
+        r"\bfaire\s+(moi\s+)?une\s+recherche\b",
+        r"\bune\s+recherche\b",
+        r"\bfaire\s+des\s+recherches\b",
+        r"\brecherche(?:r|s)?\b",
+        r"\bcherche(?:r|s)?\b",
+        r"\btrouve(?:r|s)?\b",
+        r"\bregarde(?:r|s)?\b",
+        r"\bwikipedia\b",
+        r"\bwikipédia\b",
+    ]
+    for pattern in polite_patterns + command_patterns:
+        query = re.sub(pattern, " ", query)
+
+    query = re.sub(r"[^0-9a-zA-ZÀ-ÿ]+", " ", query)
+    query = re.sub(
+        r"\b(sur|dans|avec|a|au|aux|de|des|du|d|la|le|les|l|un|une|s)\b",
+        " ",
+        query,
+    )
+    query = re.sub(r"\s+", " ", query).strip()
+    return query or original
 
 
 def Google_Result_Item(title=None, description=None, url=None):
@@ -5321,8 +5358,9 @@ def Google(to_search, rnbr=50,wiki_failed=False):  # ,tstmode = True):
 
         if len(google_result) == 0:
             PRINT("\n-Trinitty:-Google() no result from google")
-            Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_result_google.wav")
-            return ()
+            if not SearchFallback:
+                Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_result_google.wav")
+                return ()
 
     if (len(GOOGLE_KEY) == 0 and len(GOOGLE_ENGINE) == 0) or SearchFallback:
 
@@ -5375,26 +5413,39 @@ def Wikipedia(to_search, Title=None, FULL=None):
 
 
     try:
-        if Title:
-            wiki_search = Title
-        else:
-
-            if "wikipedia" not in to_search.lower():
-                to_search_title = "wikipedia " + to_search
-            else:
-                to_search_title = to_search
-
-            wiki_search = GetTitleLink(to_search_title, site="wikipedia")
-
-        if not wiki_search:
-            PRINT("\n-Trinitty:Wikipedia no result from google")
-            Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_result_wiki.wav")
-
-            return(Google(original_search,wiki_failed=True))
-
         wikipedia.set_lang("fr")
 
-        query_list = wikipedia.search(wiki_search)
+        wiki_candidates = []
+        if Title:
+            wiki_candidates.append(Title)
+        else:
+            clean_search = Clean_Wikipedia_Search_Query(to_search)
+            clean_original = Clean_Wikipedia_Search_Query(original_search)
+
+            if "wikipedia" not in clean_search.lower():
+                to_search_title = "wikipedia " + clean_search
+            else:
+                to_search_title = clean_search
+
+            wiki_search = GetTitleLink(to_search_title, site="wikipedia")
+            if wiki_search:
+                wiki_candidates.append(wiki_search)
+
+            for candidate in [clean_search, clean_original, to_search, original_search]:
+                clean_candidate = Clean_Wikipedia_Search_Query(candidate)
+                if clean_candidate and clean_candidate not in wiki_candidates:
+                    wiki_candidates.append(clean_candidate)
+
+        query_list = []
+        for wiki_search in wiki_candidates:
+            PRINT("\n-Trinitty:Wikipedia search candidate:", wiki_search)
+            try:
+                query_list = wikipedia.search(wiki_search)
+            except Exception as e:
+                PRINT("\n-Trinitty:Wikipedia search candidate error:", str(e))
+                query_list = []
+            if query_list:
+                break
         #        query_list = [i.replace(" ","_") for i in query_list]
 
         if len(query_list) > 0:
@@ -6592,13 +6643,13 @@ def Isolate_Search(txt, function_name):
            for token in full_tokens:
                PRINT(f"\n-Trinitty:rm_trigger:Texte: {token.text}, Hash: {token.orth} i:{token.i} idx:{token.idx}")
                if idx >= len(trig):
-                  print("\n-Trinitty:rm_trigger:Break: idx %s > len(trig) %s"%( idx,len(trig)) )
+                  PRINT("\n-Trinitty:rm_trigger:Break: idx %s > len(trig) %s"%( idx,len(trig)) )
                   break
                if trig[idx] == "*":
                   idx += 1
                   starlock = True
                elif trig[idx] == token.text:
-                    print(f"\n-Trinitty:rm_trigger:trig[idx]:{trig[idx]} == token:{token.text}")
+                    PRINT(f"\n-Trinitty:rm_trigger:trig[idx]:{trig[idx]} == token:{token.text}")
                     bucket_id.append(token.i)
                     bucket_name.append(token.text)
                     idx += 1
@@ -6622,7 +6673,7 @@ def Isolate_Search(txt, function_name):
 
        clean_request = []
        for it in isolated_tokens:
-            print(f"\n-Trinitty:rm_trigger:it.txt {it.text} it.i {it.i} it.i in bucket_id:{it.i in bucket_id}")
+            PRINT(f"\n-Trinitty:rm_trigger:it.txt {it.text} it.i {it.i} it.i in bucket_id:{it.i in bucket_id}")
             if it.i not in Forbiden_Id:
                 clean_request.append(it.text)
 
@@ -6644,7 +6695,7 @@ def Isolate_Search(txt, function_name):
     for _n,token in enumerate(doc):
         if token.text == ".":
               if token.is_punct and token.head.pos_ == "VERB" and len(isolated_wanabe) > 0:
-                  print("\nBreakpoint")
+                  PRINT("\nBreakpoint")
                   break
 
         elif any(dep in token.dep_ for dep in ["obj", "obl"]) and token.dep_ != "iobj" and token.head.pos_ == "VERB":
