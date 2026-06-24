@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import time
+import traceback
 from urllib.parse import quote_plus
 from urllib.request import urlopen
 
@@ -25,7 +26,7 @@ from difflib import SequenceMatcher
 
 from datetime import datetime
 
-from shutil import copy2, move, which
+from shutil import copy2, copyfile, move, which
 
 from queue import Empty, Queue
 from threading import Event, Thread, current_thread, main_thread
@@ -815,17 +816,50 @@ def signal_ctrlc(_sig, _frame):
     return Quit()
 
 
+def Debug_Log_File():
+    log_dir = User_Data_Path("logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError:
+        log_dir = os.path.join(globals().get("SCRIPT_PATH", Default_Script_Path()), "tmp")
+        os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, "trinitty-debug-%s.log" % datetime.now().strftime("%Y%m%d"))
+
+
+def Debug_Log(message, other=None):
+    if not globals().get("DEBUG", False):
+        return False
+    if other is not None:
+        message = "%s %s" % (message, other)
+    try:
+        with open(Debug_Log_File(), "a+", encoding="utf-8") as f:
+            f.write(
+                "[%s] pid=%s thread=%s %s\n"
+                % (
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                    os.getpid(),
+                    current_thread().name,
+                    str(message),
+                )
+            )
+        return True
+    except Exception as e:
+        print("\n-Trinitty:Erreur dans la fonction Debug_Log:", str(e), file=sys.stderr)
+        return False
+
+
 def PRINT(txt, other=None):
     tmp_txt = txt
     #   print("\n-Trinitty:Dans la fonction PRINT().")
     #   print("\n-Trinitty:other:",other)
     try:
         if globals().get("DEBUG", False):
-            if other:
+            if other is not None:
                 tmp_txt = str(txt) + " " + str(other)
                 print(tmp_txt)
             else:
                 print(tmp_txt)
+            Debug_Log(tmp_txt)
     except Exception as e:
         print("\n-Trinitty:Erreur dans la fonction PRINT:", str(e))
 
@@ -844,6 +878,7 @@ STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
 STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
 GOOGLE_STT_TIMEOUT = 20.0
+GOOGLE_LANGUAGE_TIMEOUT = 8.0
 RESULTS_HUB_MAX_ATTEMPTS = 2
 RESULTS_HUB_CONTINUE = object()
 GPT4FREE_COOKIES_LOADED = False
@@ -1099,6 +1134,13 @@ def parse_response(data):
     return final.replace("####", "").replace("###","")
 
 
+def Play_Wait_Response_Audio():
+    rnd = str(Non_Crypto_Randint(1, 10))
+    wait = SCRIPT_PATH + "/local_sounds/wait/" + rnd + ".wav"
+    PRINT("\n-Trinitty:wait response audio:%s" % wait)
+    return Play_Audio_File(wait)
+
+
 def To_Gpt(input):
 
     Answer_Known = Check_History(input)
@@ -1107,13 +1149,14 @@ def To_Gpt(input):
         return Trinitty()
 
     last_sentence.put(input)
+    Play_Wait_Response_Audio()
 
     openai_response = Openai_Gpt(input)
     if openai_response:
         return Text_To_Speech(str(openai_response), stayawake=False)
 
     if GPT4FREE_SERVERS_STATUS and Ensure_Gpt4free_Providers():
-        return FreeGpt(input, check_history=False, save_last_sentence=False)
+        return FreeGpt(input, check_history=False, save_last_sentence=False, play_wait=False)
 
     print("\n-Trinitty:Error no OpenAI response and no gpt4free fallback provider available.")
     Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_respons_allprovider.wav")
@@ -1699,6 +1742,12 @@ def Log_Error(context, err=None):
             f.write("[%s] %s: %s\n" % (entry["time"], entry["context"], entry["error"]))
     except Exception as log_error:
         print("\n-Trinitty:Error:Log_Error:%s" % str(log_error), file=sys.stderr)
+    if globals().get("DEBUG", False):
+        if isinstance(err, BaseException):
+            debug_error = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+        else:
+            debug_error = str(err or "")
+        Debug_Log("ERROR[%s] %s" % (context, debug_error))
     return entry
 
 
@@ -1917,7 +1966,7 @@ def Refresh_Gpt4free_Providers_Config():
     return True
 
 
-def FreeGpt(input, check_history=True, save_last_sentence=True):
+def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True):
     PRINT("\n-Trinitty:Dans la fonction FreeGpt")
 
     global LAST_DIALOG
@@ -1979,11 +2028,6 @@ def FreeGpt(input, check_history=True, save_last_sentence=True):
     if save_last_sentence:
         last_sentence.put(input)
 
-    #    os.system("aplay -q %s"%SCRIPT_PATH+"/local_sounds/server/gpt3.wav")
-    rnd = str(Non_Crypto_Randint(1, 10))
-    wait = SCRIPT_PATH + "/local_sounds/wait/" + rnd + ".wav"
-#    os.system("aplay -q %s" % wait)
-    print("wait:",wait)
     response = ""
     response_text = ""
     successful_provider = None
@@ -2002,6 +2046,9 @@ def FreeGpt(input, check_history=True, save_last_sentence=True):
     if not Ensure_Gpt4free_Runtime_Available():
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_respons_allprovider.wav")
         return Go_Back_To_Sleep(False)
+
+    if play_wait:
+        Play_Wait_Response_Audio()
 
     Ensure_Gpt4free_Cookies_Loaded()
 
@@ -5468,9 +5515,9 @@ def Check_Transcript(transcripts, transcripts_confidence, words, words_confidenc
     if len(Err_msg) > 0:
         if Err_msg.startswith("Speech_To_Text:"):
             Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_stt.wav")
-            Text_To_Speech(Err_msg, stayawake=True)
-            Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_prompt.wav")
-            return Prompt()
+            PRINT("\n-Trinitty:Speech_To_Text failed; returning to wake loop instead of prompting.")
+            Log_Error("Check_Transcript", Err_msg)
+            return ("", False)
 
     if len(transcripts) > 0:
         PRINT("\n-Trinitty:transcripts:\n\n%s" % transcripts)
@@ -5789,6 +5836,10 @@ def Speech_To_Text(audio):
     try:
         stt_timeout = Config_Positive_Float(globals().get("GOOGLE_STT_TIMEOUT", 20.0), 20.0)
         PRINT("\n-Trinitty:Speech_To_Text timeout:%s" % stt_timeout)
+        PRINT(
+            "\n-Trinitty:GOOGLE_APPLICATION_CREDENTIALS:%s"
+            % os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        )
         with Runtime_Timeout(stt_timeout, "Google Speech-to-Text"):
             PRINT("\n-Trinitty:Speech_To_Text init Google client")
             client = speech.SpeechClient()
@@ -7509,7 +7560,7 @@ def Save_History(answer, no_audio=False):
         current_wav = Runtime_Tmp_Path("current_answer.wav")
 
         if os.path.exists(current_wav):
-            copy2(current_wav, new_wav)
+            copyfile(current_wav, new_wav)
         else:
             PRINT("\n-Trinitty:Save_History:current answer wav missing:%s" % current_wav)
             new_wav = SCRIPT_PATH + "/local_sounds/errors/err_no_audio_saved.wav"
@@ -7703,25 +7754,34 @@ def Classify(text_content):
     categories = []
 
     try:
-        client = language_v1.LanguageServiceClient()
-
-        type_ = language_v1.Document.Type.PLAIN_TEXT
-        language = "fr"
-        document = {"content": text_content, "type_": type_, "language": language}
-        content_categories_version = language_v1.ClassificationModelOptions.V2Model.ContentCategoriesVersion.V2
-        response = client.classify_text(
-            request={
-                "document": document,
-                "classification_model_options": {
-                    "v2_model": {"content_categories_version": content_categories_version}
-                },
-            }
+        language_timeout = Config_Positive_Float(globals().get("GOOGLE_LANGUAGE_TIMEOUT", 8.0), 8.0)
+        PRINT("\n-Trinitty:Classify timeout:%s" % language_timeout)
+        PRINT(
+            "\n-Trinitty:GOOGLE_APPLICATION_CREDENTIALS:%s"
+            % os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
         )
+        with Runtime_Timeout(language_timeout, "Google Natural Language classify_text"):
+            client = language_v1.LanguageServiceClient()
 
-        for category in response.categories:
-            categories.append(category.name.replace("/", "-").replace(" ", "-"))
+            type_ = language_v1.Document.Type.PLAIN_TEXT
+            language = "fr"
+            document = {"content": text_content, "type_": type_, "language": language}
+            content_categories_version = language_v1.ClassificationModelOptions.V2Model.ContentCategoriesVersion.V2
+            response = client.classify_text(
+                request={
+                    "document": document,
+                    "classification_model_options": {
+                        "v2_model": {"content_categories_version": content_categories_version}
+                    },
+                },
+                timeout=language_timeout,
+            )
+
+            for category in response.categories:
+                categories.append(category.name.replace("/", "-").replace(" ", "-"))
     except Exception as e:
         PRINT("\n-Trinitty:Error:", str(e))
+        Log_Error("Classify", e)
         categories = ["nocat"]
 
     if len(categories) == 0:
@@ -7869,6 +7929,7 @@ def GetConf():
     global OPENAI_INSTRUCTIONS
     global SPACY_MODEL
     global GOOGLE_STT_TIMEOUT
+    global GOOGLE_LANGUAGE_TIMEOUT
     global GOOGLE_SORT_BY_DATE
     global CHECK_UPDATE
     global CMD_DBG
@@ -7894,6 +7955,7 @@ def GetConf():
         "OPENAI_INSTRUCTIONS",
         "SPACY_MODEL",
         "GOOGLE_STT_TIMEOUT",
+        "GOOGLE_LANGUAGE_TIMEOUT",
         "GOOGLE_SORT_BY_DATE",
         "GPT4FREE_SERVERS_LIST",
         "GPT4FREE_SERVERS_STATUS",
@@ -8014,6 +8076,9 @@ def GetConf():
             elif option == "GOOGLE_STT_TIMEOUT":
                 GOOGLE_STT_TIMEOUT = Config_Positive_Float(conf, 20.0)
 
+            elif option == "GOOGLE_LANGUAGE_TIMEOUT":
+                GOOGLE_LANGUAGE_TIMEOUT = Config_Positive_Float(conf, 8.0)
+
             elif option == "GOOGLE_SORT_BY_DATE":
                 GOOGLE_SORT_BY_DATE = Config_Bool(conf, default=False)
 
@@ -8113,6 +8178,7 @@ OPENAI_TIMEOUT = 30
 OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
 SPACY_MODEL = fr_core_news_md
 GOOGLE_STT_TIMEOUT = 20
+GOOGLE_LANGUAGE_TIMEOUT = 8
 GOOGLE_SORT_BY_DATE = False
 GPT4FREE_SERVERS_LIST = None #[g4f.Provider.PROVIDERNAME1,g4f.Provider.PROVIDERNAME2] or None
 GPT4FREE_SERVERS_STATUS = Active #Active or Unknown or All or None
@@ -8150,6 +8216,7 @@ XCB_ERROR_FIX = False #Fix Xcb error from popping due to DISPLAY env variable.""
         OPENAI_INSTRUCTIONS = "Reponds en francais de facon concise et naturelle."
         SPACY_MODEL = "fr_core_news_md"
         GOOGLE_STT_TIMEOUT = 20.0
+        GOOGLE_LANGUAGE_TIMEOUT = 8.0
         GOOGLE_SORT_BY_DATE = False
         GPT4FREE_SERVERS_LIST = None
         SEARCH_DBG = False
@@ -8342,6 +8409,7 @@ if __name__ == "__main__":
     OPENAI_INSTRUCTIONS = "Reponds en francais de facon concise et naturelle."
     SPACY_MODEL = "fr_core_news_md"
     GOOGLE_STT_TIMEOUT = 20.0
+    GOOGLE_LANGUAGE_TIMEOUT = 8.0
     GOOGLE_SORT_BY_DATE = False
     CHECK_UPDATE = False
     DEBUG = False
@@ -8355,6 +8423,8 @@ if __name__ == "__main__":
     Auto_Run_Dependency_Installer(user_data_root)
     Configure_Default_Google_Credentials()
     GetConf()
+    if DEBUG:
+        print("-Trinitty:Journal debug: %s" % Debug_Log_File())
 
 
     if GPT4FREE_SERVERS_LIST:
@@ -8437,6 +8507,7 @@ if __name__ == "__main__":
     PRINT("-Trinitty:OPENAI_TIMEOUT:%s" % OPENAI_TIMEOUT)
     PRINT("-Trinitty:SPACY_MODEL:%s" % SPACY_MODEL)
     PRINT("-Trinitty:GOOGLE_STT_TIMEOUT:%s" % GOOGLE_STT_TIMEOUT)
+    PRINT("-Trinitty:GOOGLE_LANGUAGE_TIMEOUT:%s" % GOOGLE_LANGUAGE_TIMEOUT)
     PRINT("-Trinitty:GOOGLE_SORT_BY_DATE:%s" % GOOGLE_SORT_BY_DATE)
     PRINT("-Trinitty:GPT4FREE_SERVERS_LIST:%s" % GPT4FREE_SERVERS_LIST)
     PRINT("-Trinitty:GPT4FREE_SERVERS_STATUS:%s" % GPT4FREE_SERVERS_STATUS)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trinitty"
-version = "0.1.12"
+version = "0.1.13"
 description = "Personal voice assistant using OpenAI, g4f fallback providers, Google Cloud speech services, and local audio assets."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -145,6 +145,7 @@ OPENAI_API_KEY_FILE = keys/openai.key
 OPENAI_MODEL = gpt-5.5
 OPENAI_TIMEOUT = 30
 GOOGLE_STT_TIMEOUT = 20
+GOOGLE_LANGUAGE_TIMEOUT = 8
 GPT4FREE_SERVERS_STATUS = Active
 ```
 
@@ -206,6 +207,31 @@ python3 -m venv --system-site-packages ~/venvs/trinitty
 PYTHONNOUSERSITE=1 ~/venvs/trinitty/bin/python -m pip install --no-cache-dir -U trinitty
 PYTHONNOUSERSITE=1 ~/venvs/trinitty/bin/trinitty --install-launcher
 ```
+
+### Google Speech-to-Text ne répond pas
+
+La reconnaissance vocale utilise Google Cloud Speech-to-Text avec des credentials ADC. Les fichiers `google_search.key` et `google_translate.key` ne servent pas à la reconnaissance vocale.
+
+Placer de préférence un fichier de service account dans:
+
+```bash
+~/.local/share/Trinitty/keys/google_adc.json
+```
+
+Vérifier aussi dans Google Cloud que:
+
+- la validation en deux étapes est activée si Google l'impose au compte;
+- l'API Speech-to-Text est activée sur le projet;
+- la facturation du projet est active si l'API le demande;
+- le service account possède les droits nécessaires.
+
+Si `DEBUG = True` dans `~/.local/share/Trinitty/datas/conf.trinity`, Trinitty écrit un journal dans:
+
+```bash
+~/.local/share/Trinitty/logs/
+```
+
+Ce journal indique notamment le chemin `GOOGLE_APPLICATION_CREDENTIALS`, les timeouts Google et les erreurs détaillées.
 
 ### Trouver les fichiers utilisés
 
