@@ -208,6 +208,25 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertIn("XCB_ERROR_FIX = True", migrated_conf)
             self.assertEqual("OPENAI_MODEL = old-user-model\n", legacy_conf.read_text())
 
+    def test_dependency_help_uses_absolute_installer_path_when_available(self):
+        help_text = trinitty.Dependency_Install_Help("google-cloud-speech")
+
+        self.assertIn(str(ROOT / "install_dependencies.sh"), help_text)
+        self.assertIn("--system --venv", help_text)
+
+    def test_missing_dependency_message_uses_runtime_help_when_installer_is_absent(self):
+        original_script_path = trinitty.Install_Dependencies_Script_Path
+        trinitty.Install_Dependencies_Script_Path = lambda: ""
+        try:
+            with self.assertRaises(ModuleNotFoundError) as cm:
+                trinitty.MissingDependency("google.cloud.speech_v1p1beta1", "google-cloud-speech")._raise()
+        finally:
+            trinitty.Install_Dependencies_Script_Path = original_script_path
+
+        self.assertIn("Optional dependency 'google-cloud-speech' is unavailable", str(cm.exception))
+        self.assertIn("trinitty --dependency-help", str(cm.exception))
+        self.assertNotIn("./install_dependencies.sh", str(cm.exception))
+
     def test_user_data_path_keeps_legacy_lowercase_directory_compatible(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"

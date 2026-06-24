@@ -189,6 +189,9 @@ def Handle_Utility_Args():
     if command == "--install-launcher":
         Install_User_Launcher()
         return True
+    if command == "--dependency-help":
+        print(Dependency_Install_Help())
+        return True
     return False
 
 
@@ -204,6 +207,47 @@ def Write_File_If_Missing(filepath, content, mode=None):
         except OSError:
             pass
     return True
+
+
+def Install_Dependencies_Script_Path():
+    candidates = [
+        os.path.join(os.getcwd(), "install_dependencies.sh"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_dependencies.sh"),
+        os.path.join(Default_Script_Path(), "install_dependencies.sh"),
+    ]
+    for candidate in dict.fromkeys(candidates):
+        if os.path.isfile(candidate):
+            return os.path.abspath(candidate)
+    return ""
+
+
+def Dependency_Install_Help(package_name=None):
+    script_path = Install_Dependencies_Script_Path()
+    package_label = package_name or "la dépendance manquante"
+    if script_path:
+        return (
+            "Pour installer %s depuis le dépôt local, utilisez ce chemin exact:\n"
+            "  %s --system --venv\n"
+        ) % (package_label, shlex.quote(script_path))
+
+    return (
+        "Aucun install_dependencies.sh n'a été trouvé dans cette installation PyPI.\n"
+        "Depuis un virtualenv Raspberry Pi existant, utilisez plutôt:\n"
+        "  source ~/venvs/trinitty/bin/activate\n"
+        "  export PYTHONNOUSERSITE=1\n"
+        "  sudo apt-get install -y python3-pyaudio alsa-utils sox libsox-fmt-all\n"
+        "  python -m pip install -U --no-cache-dir trinitty google-cloud-speech grpcio grpcio-status google-api-core protobuf\n"
+        "\n"
+        "Si vous utilisez le dépôt Git, lancez le script depuis son chemin absolu, par exemple:\n"
+        "  /chemin/vers/Trinitty/install_dependencies.sh --system --venv\n"
+    )
+
+
+def Dependency_Install_Help_Summary(package_name=None):
+    script_path = Install_Dependencies_Script_Path()
+    if script_path:
+        return "Run: %s --system --venv" % shlex.quote(script_path)
+    return "Run: trinitty --dependency-help"
 
 
 def Config_Keys_From_Text(text):
@@ -379,7 +423,7 @@ class MissingDependency:
         message = "Optional dependency '%s' is unavailable." % self.package_name
         if self.error:
             message += " Import error: %s" % self.error
-        message += " Install Trinitty dependencies with ./install_dependencies.sh."
+        message += " %s." % Dependency_Install_Help_Summary(self.package_name)
         raise ModuleNotFoundError(message) from self.error
 
     def __getattr__(self, name):
