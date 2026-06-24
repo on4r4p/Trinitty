@@ -124,11 +124,18 @@ Les fichiers les plus utiles y sont créés sans écraser l'existant:
 
 - `datas/conf.trinity`: overrides locaux lus après la configuration fournie avec le package.
 - `install_dependencies.sh`: installateur local, copié sans écraser l'existant.
+- `requirements.txt`: dépendances Python utilisées par l'installateur local.
 - `keys/openai.key`: clé OpenAI, une seule ligne, sans guillemets.
 - `keys/README.txt`: rappel des fichiers de clés reconnus.
 - `history/`, `tmp/`, `saved_answer/`, `g4f_cookies/`: dossiers runtime.
 
 La configuration par défaut fournie avec le package est dans `datas/conf.trinity`. Pour éviter de publier des chemins ou préférences locales, placer les overrides dans `~/.local/share/Trinitty/datas/conf.trinity`.
+
+Au premier lancement après installation ou mise à jour, Trinitty lance automatiquement `~/.local/share/Trinitty/install_dependencies.sh` une seule fois pour la version installée. Pour désactiver cette vérification automatique:
+
+```bash
+export TRINITTY_SKIP_AUTO_INSTALL=1
+```
 
 Exemple:
 

@@ -209,17 +209,22 @@ def Write_File_If_Missing(filepath, content, mode=None):
     return True
 
 
-def Install_Dependencies_Source_Candidates():
+def Install_Dependencies_Source_Candidates(filename="install_dependencies.sh"):
     return [
-        os.path.join(os.getcwd(), "install_dependencies.sh"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_dependencies.sh"),
-        os.path.join(Default_Script_Path(), "install_dependencies.sh"),
+        os.path.join(os.getcwd(), filename),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), filename),
+        os.path.join(Default_Script_Path(), filename),
     ]
 
 
 def Install_Dependencies_User_Path(root=None):
     root = root or User_Data_Root()
     return os.path.join(root, "install_dependencies.sh")
+
+
+def Install_Dependencies_Requirements_User_Path(root=None):
+    root = root or User_Data_Root()
+    return os.path.join(root, "requirements.txt")
 
 
 def Install_Dependencies_Script_Path():
@@ -235,19 +240,127 @@ def Install_Dependencies_Script_Path():
 
 def Initialize_User_Installer(root=None):
     root = root or User_Data_Root()
-    destination = Install_Dependencies_User_Path(root)
-    if os.path.exists(destination):
+    copied = []
+    files = [
+        ("install_dependencies.sh", Install_Dependencies_User_Path(root), 0o700),
+        ("requirements.txt", Install_Dependencies_Requirements_User_Path(root), 0o600),
+    ]
+
+    for filename, destination, mode in files:
+        if os.path.exists(destination):
+            continue
+
+        for source in dict.fromkeys(Install_Dependencies_Source_Candidates(filename)):
+            if os.path.isfile(source) and os.path.abspath(source) != os.path.abspath(destination):
+                os.makedirs(os.path.dirname(destination), exist_ok=True)
+                copy2(source, destination)
+                try:
+                    os.chmod(destination, mode)
+                except OSError:
+                    pass
+                copied.append(destination)
+                break
+
+    return copied
+
+
+def Dependency_Installer_Is_User_Copy(script_path=None, root=None):
+    script_path = script_path or Install_Dependencies_Script_Path()
+    root = root or User_Data_Root()
+    try:
+        return os.path.abspath(script_path) == os.path.abspath(Install_Dependencies_User_Path(root))
+    except Exception:
         return False
 
-    for source in dict.fromkeys(Install_Dependencies_Source_Candidates()):
-        if os.path.isfile(source) and os.path.abspath(source) != os.path.abspath(destination):
-            os.makedirs(os.path.dirname(destination), exist_ok=True)
-            copy2(source, destination)
-            try:
-                os.chmod(destination, 0o700)
-            except OSError:
-                pass
-            return True
+
+def Dependency_Installer_Command(script_path=None, root=None):
+    script_path = script_path or Install_Dependencies_Script_Path()
+    if not script_path:
+        return []
+    if Dependency_Installer_Is_User_Copy(script_path, root):
+        return [script_path, "--system", "--no-venv", "--no-dev-tools", "--no-launcher"]
+    return [script_path, "--system", "--venv"]
+
+
+def Dependency_Installer_Stamp_Path(root=None):
+    root = root or User_Data_Root()
+    return os.path.join(root, ".install_dependencies.version")
+
+
+def Auto_Dependency_Installer_Enabled():
+    if os.environ.get("TRINITTY_SKIP_AUTO_INSTALL"):
+        return False
+    value = os.environ.get("TRINITTY_AUTO_INSTALL_DEPENDENCIES", "1").strip().lower()
+    return value not in ["0", "false", "no", "off"]
+
+
+def Current_Trinitty_Version_For_Installer():
+    try:
+        version = Installed_Trinitty_Version()
+    except Exception:
+        version = ""
+    return str(version or "unknown").strip()
+
+
+def Last_Dependency_Installer_Version(root=None):
+    stamp_path = Dependency_Installer_Stamp_Path(root)
+    try:
+        with open(stamp_path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def Mark_Dependency_Installer_Version(root=None, version=None):
+    root = root or User_Data_Root()
+    version = version or Current_Trinitty_Version_For_Installer()
+    stamp_path = Dependency_Installer_Stamp_Path(root)
+    os.makedirs(os.path.dirname(stamp_path), exist_ok=True)
+    with open(stamp_path, "w") as f:
+        f.write(str(version).strip() + "\n")
+
+
+def Auto_Run_Dependency_Installer(root=None):
+    root = root or User_Data_Root()
+    if not Auto_Dependency_Installer_Enabled():
+        PRINT("\n-Trinitty:Installation automatique des dépendances désactivée.")
+        return False
+
+    Initialize_User_Installer(root)
+    version = Current_Trinitty_Version_For_Installer()
+    if Last_Dependency_Installer_Version(root) == version:
+        PRINT("\n-Trinitty:Dépendances déjà vérifiées pour Trinitty %s." % version)
+        return False
+
+    script_path = Install_Dependencies_User_Path(root)
+    if not os.path.isfile(script_path):
+        script_path = Install_Dependencies_Script_Path()
+    command = Dependency_Installer_Command(script_path, root)
+    if not command:
+        print("\n-Trinitty:Warning:install_dependencies.sh introuvable; dépendances non vérifiées.")
+        return False
+
+    print("\n-Trinitty:Vérification/installation automatique des dépendances pour Trinitty %s." % version)
+    print("-Trinitty:Commande: %s" % " ".join(shlex.quote(part) for part in command))
+
+    env = os.environ.copy()
+    env["PYTHON"] = sys.executable
+    env["PYTHONNOUSERSITE"] = "1"
+    try:
+        result = subprocess.run(command, cwd=root, env=env, check=False)
+    except Exception as e:
+        print("\n-Trinitty:Warning:install_dependencies.sh n'a pas pu démarrer:%s" % str(e))
+        Log_Error("Auto_Run_Dependency_Installer", e)
+        return False
+
+    if result.returncode == 0:
+        Mark_Dependency_Installer_Version(root, version)
+        print("\n-Trinitty:Dépendances vérifiées pour Trinitty %s." % version)
+        return True
+
+    print("\n-Trinitty:Warning:install_dependencies.sh a échoué avec le code %s." % result.returncode)
+    print("-Trinitty:Le prochain lancement réessaiera. Pour désactiver: TRINITTY_SKIP_AUTO_INSTALL=1")
+    Log_Error("Auto_Run_Dependency_Installer", "exit code %s" % result.returncode)
     return False
 
 
@@ -255,10 +368,11 @@ def Dependency_Install_Help(package_name=None):
     script_path = Install_Dependencies_Script_Path()
     package_label = package_name or "la dépendance manquante"
     if script_path:
+        command = " ".join(shlex.quote(part) for part in Dependency_Installer_Command(script_path))
         return (
-            "Pour installer %s depuis le dépôt local, utilisez ce chemin exact:\n"
-            "  %s --system --venv\n"
-        ) % (package_label, shlex.quote(script_path))
+            "Pour installer %s, utilisez ce chemin exact:\n"
+            "  %s\n"
+        ) % (package_label, command)
 
     return (
         "Aucun install_dependencies.sh n'a été trouvé dans cette installation PyPI.\n"
@@ -276,7 +390,8 @@ def Dependency_Install_Help(package_name=None):
 def Dependency_Install_Help_Summary(package_name=None):
     script_path = Install_Dependencies_Script_Path()
     if script_path:
-        return "Run: %s --system --venv" % shlex.quote(script_path)
+        command = " ".join(shlex.quote(part) for part in Dependency_Installer_Command(script_path))
+        return "Run: %s" % command
     return "Run: trinitty --dependency-help"
 
 
@@ -355,8 +470,7 @@ def Initialize_User_Data():
     if Write_File_If_Missing(keys_readme, User_Keys_Readme_Template()):
         created.append(keys_readme)
 
-    if Initialize_User_Installer(root):
-        created.append(Install_Dependencies_User_Path(root))
+    created.extend(Initialize_User_Installer(root))
 
     if created:
         print("\n-Trinitty:Configuration utilisateur initialisée dans %s" % root)
@@ -8237,7 +8351,8 @@ if __name__ == "__main__":
     XCB_ERROR_FIX = False
     SAVED_ANSWER = SCRIPT_PATH + "/local_sounds/saved_answer/"
 
-    Initialize_User_Data()
+    user_data_root = Initialize_User_Data()
+    Auto_Run_Dependency_Installer(user_data_root)
     Configure_Default_Google_Credentials()
     GetConf()
 

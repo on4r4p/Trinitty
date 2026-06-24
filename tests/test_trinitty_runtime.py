@@ -135,6 +135,9 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 self.assertTrue(user_installer.exists())
                 self.assertTrue(os.access(user_installer, os.X_OK))
                 self.assertIn("install_user_launcher()", user_installer.read_text())
+                user_requirements = user_root / "requirements.txt"
+                self.assertTrue(user_requirements.exists())
+                self.assertIn("google-cloud-speech", user_requirements.read_text())
                 self.assertTrue((user_root / "history").is_dir())
                 self.assertTrue((user_root / "saved_answer" / "saved_error").is_dir())
                 user_conf = user_root / "datas" / "conf.trinity"
@@ -159,10 +162,12 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 openai_key.write_text("sk-existing\n")
                 user_conf.write_text("OPENAI_MODEL = custom-user-model\n")
                 user_installer.write_text("# custom installer\n")
+                user_requirements.write_text("# custom requirements\n")
                 with contextlib.redirect_stdout(io.StringIO()):
                     trinitty.Initialize_User_Data()
                 self.assertEqual("sk-existing\n", openai_key.read_text())
                 self.assertEqual("# custom installer\n", user_installer.read_text())
+                self.assertEqual("# custom requirements\n", user_requirements.read_text())
                 updated_conf = user_conf.read_text()
                 self.assertTrue(updated_conf.startswith("OPENAI_MODEL = custom-user-model\n"))
                 self.assertIn("SPACY_MODEL = fr_core_news_md", updated_conf)
@@ -238,6 +243,67 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     os.environ["HOME"] = original_home
 
             self.assertIn(str(installer), help_text)
+            self.assertIn("--no-venv", help_text)
+            self.assertNotIn("--venv", help_text.replace("--no-venv", ""))
+
+    def test_auto_dependency_installer_runs_once_per_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            installer = root / "install_dependencies.sh"
+            requirements = root / "requirements.txt"
+            installer.write_text("#!/usr/bin/env bash\n")
+            installer.chmod(0o700)
+            requirements.write_text("")
+            calls = []
+            original_run = trinitty.subprocess.run
+            original_version = trinitty.Current_Trinitty_Version_For_Installer
+            original_enabled = trinitty.Auto_Dependency_Installer_Enabled
+
+            def fake_run(command, cwd=None, env=None, check=False):
+                calls.append((command, cwd, env, check))
+                return SimpleNamespace(returncode=0)
+
+            try:
+                trinitty.subprocess.run = fake_run
+                trinitty.Current_Trinitty_Version_For_Installer = lambda: "9.9.9"
+                trinitty.Auto_Dependency_Installer_Enabled = lambda: True
+                self.assertTrue(trinitty.Auto_Run_Dependency_Installer(str(root)))
+                self.assertFalse(trinitty.Auto_Run_Dependency_Installer(str(root)))
+            finally:
+                trinitty.subprocess.run = original_run
+                trinitty.Current_Trinitty_Version_For_Installer = original_version
+                trinitty.Auto_Dependency_Installer_Enabled = original_enabled
+
+            self.assertEqual(1, len(calls))
+            self.assertEqual(
+                [str(installer), "--system", "--no-venv", "--no-dev-tools", "--no-launcher"],
+                calls[0][0],
+            )
+            self.assertEqual(str(root), calls[0][1])
+            self.assertEqual(trinitty.sys.executable, calls[0][2]["PYTHON"])
+            self.assertEqual("9.9.9\n", (root / ".install_dependencies.version").read_text())
+
+    def test_auto_dependency_installer_does_not_mark_failed_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            installer = root / "install_dependencies.sh"
+            installer.write_text("#!/usr/bin/env bash\n")
+            installer.chmod(0o700)
+            (root / "requirements.txt").write_text("")
+            original_run = trinitty.subprocess.run
+            original_version = trinitty.Current_Trinitty_Version_For_Installer
+            original_enabled = trinitty.Auto_Dependency_Installer_Enabled
+            try:
+                trinitty.subprocess.run = lambda *_args, **_kwargs: SimpleNamespace(returncode=42)
+                trinitty.Current_Trinitty_Version_For_Installer = lambda: "9.9.9"
+                trinitty.Auto_Dependency_Installer_Enabled = lambda: True
+                self.assertFalse(trinitty.Auto_Run_Dependency_Installer(str(root)))
+            finally:
+                trinitty.subprocess.run = original_run
+                trinitty.Current_Trinitty_Version_For_Installer = original_version
+                trinitty.Auto_Dependency_Installer_Enabled = original_enabled
+
+            self.assertFalse((root / ".install_dependencies.version").exists())
 
     def test_missing_dependency_message_uses_runtime_help_when_installer_is_absent(self):
         original_script_path = trinitty.Install_Dependencies_Script_Path
