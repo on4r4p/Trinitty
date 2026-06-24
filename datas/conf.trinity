@@ -7,6 +7,7 @@ OPENAI_API_KEY_FILE = keys/openai.key
 OPENAI_TIMEOUT = 30
 OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
 SPACY_MODEL = fr_core_news_md
+GOOGLE_STT_TIMEOUT = 20 #seconds before cancelling Google Speech-to-Text
 GOOGLE_SORT_BY_DATE = False #True adds sort=date to Google Custom Search requests
 
 #needbrowser g4f.Provider.Gemini,g4f.Provider.HailuoAI,g4f.Provider.Cloudflare

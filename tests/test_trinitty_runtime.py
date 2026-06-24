@@ -31,6 +31,7 @@ def reset_command_state():
     trinitty.COMMAND_CLASSIFIER_THRESHOLD = 0.65
     trinitty.COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"
     trinitty.COMMAND_CLASSIFIER_MODEL = None
+    trinitty.GOOGLE_STT_TIMEOUT = 20.0
     trinitty.GPT4FREE_COOKIES_AUTO_SYNC = True
     trinitty.GPT4FREE_COOKIES_SYNC_DIR = "tools/har_and_cookies"
     trinitty.GPT4FREE_COOKIES_LOADED = False
@@ -722,6 +723,20 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Read_Results = original_read_results
 
         self.assertEqual([[{"google_title": "Titre"}]], calls)
+
+    def test_command_routes_polite_show_history_request(self):
+        reset_command_state()
+        calls = []
+        trinitty.Loaded_Actions_Words_Requests = ["afficher"]
+        trinitty.Loaded_Show_History_Requests = ["est ce que tu peux afficher l'historique"]
+        original_show_history = trinitty.Show_History
+        trinitty.Show_History = lambda: calls.append("show-history") or True
+        try:
+            self.assertTrue(trinitty.Commandes("est ce que tu peux afficher l'historique"))
+        finally:
+            trinitty.Show_History = original_show_history
+
+        self.assertEqual(["show-history"], calls)
 
     def test_command_classifier_training_samples_collects_commands_and_negatives(self):
         reset_command_state()
@@ -1955,6 +1970,96 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn("bad marshal data", err_msg)
         self.assertEqual("Speech_To_Text", trinitty.Runtime_Errors[-1]["context"])
 
+    def test_speech_to_text_passes_google_timeout(self):
+        reset_command_state()
+        original_speech = trinitty.speech
+        calls = []
+
+        class FakeRecognitionConfig:
+            AudioEncoding = SimpleNamespace(LINEAR16="linear16")
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class FakeRecognitionAudio:
+            def __init__(self, content):
+                self.content = content
+
+        class FakeSpeechClient:
+            def recognize(self, request, timeout=None):
+                calls.append((request, timeout))
+                word = SimpleNamespace(word="minecraft", confidence=0.91)
+                alternative = SimpleNamespace(
+                    transcript="question minecraft",
+                    confidence=0.93,
+                    words=[word],
+                )
+                result = SimpleNamespace(alternatives=[alternative])
+                return SimpleNamespace(results=[result])
+
+        trinitty.speech = SimpleNamespace(
+            SpeechClient=FakeSpeechClient,
+            RecognitionAudio=FakeRecognitionAudio,
+            RecognitionConfig=FakeRecognitionConfig,
+        )
+        trinitty.GOOGLE_STT_TIMEOUT = 3.5
+        try:
+            transcripts, confidence, words, words_confidence, err_msg = trinitty.Speech_To_Text(b"audio")
+        finally:
+            trinitty.speech = original_speech
+
+        self.assertEqual("question minecraft", transcripts)
+        self.assertEqual(0.93, confidence)
+        self.assertEqual(["minecraft"], words)
+        self.assertEqual([0.91], words_confidence)
+        self.assertEqual("", err_msg)
+        self.assertEqual(3.5, calls[0][1])
+        self.assertEqual(b"audio", calls[0][0]["audio"].content)
+
+    def test_speech_to_text_returns_error_when_google_recognize_times_out(self):
+        reset_command_state()
+        original_speech = trinitty.speech
+        trinitty.Runtime_Errors = []
+
+        class FakeRecognitionConfig:
+            AudioEncoding = SimpleNamespace(LINEAR16="linear16")
+
+            def __init__(self, **_kwargs):
+                pass
+
+        class FakeRecognitionAudio:
+            def __init__(self, content):
+                self.content = content
+
+        class FakeSpeechClient:
+            def recognize(self, request, timeout=None):
+                raise TimeoutError("google speech timeout")
+
+        trinitty.speech = SimpleNamespace(
+            SpeechClient=FakeSpeechClient,
+            RecognitionAudio=FakeRecognitionAudio,
+            RecognitionConfig=FakeRecognitionConfig,
+        )
+        try:
+            transcripts, confidence, words, words_confidence, err_msg = trinitty.Speech_To_Text(b"audio")
+        finally:
+            trinitty.speech = original_speech
+
+        self.assertEqual("", transcripts)
+        self.assertEqual(0, confidence)
+        self.assertEqual([], words)
+        self.assertEqual([], words_confidence)
+        self.assertIn("Speech_To_Text:google speech timeout", err_msg)
+        self.assertEqual("Speech_To_Text", trinitty.Runtime_Errors[-1]["context"])
+
+    @unittest.skipUnless(hasattr(trinitty.signal, "SIGALRM"), "SIGALRM is POSIX-only")
+    def test_runtime_timeout_raises_on_main_thread(self):
+        reset_command_state()
+
+        with self.assertRaises(TimeoutError):
+            with trinitty.Runtime_Timeout(0.01, "test"):
+                time.sleep(0.1)
+
     def test_interpretor_mode_skips_pico_key_loading(self):
         reset_command_state()
         trinitty.INTERPRETOR = True
@@ -2131,7 +2236,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 )
             )
             (datas / "conf.local.trinity").write_text(
-                "SAVED_ANSWER = %s\nOPENAI_TIMEOUT = 7\n" % local_saved
+                "SAVED_ANSWER = %s\nOPENAI_TIMEOUT = 7\nGOOGLE_STT_TIMEOUT = 11\n" % local_saved
             )
 
             trinitty.SCRIPT_PATH = str(root)
@@ -2142,6 +2247,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
             self.assertEqual(str(local_saved), trinitty.SAVED_ANSWER)
             self.assertEqual(7.0, trinitty.OPENAI_TIMEOUT)
+            self.assertEqual(11.0, trinitty.GOOGLE_STT_TIMEOUT)
             self.assertEqual("Keep # as plain text", trinitty.OPENAI_INSTRUCTIONS)
             self.assertTrue((local_saved / "saved_error").exists())
 
@@ -2159,12 +2265,13 @@ class TrinittyRuntimeTests(unittest.TestCase):
                         "SAVED_ANSWER = default",
                         "OPENAI_MODEL = package-model",
                         "OPENAI_TIMEOUT = 30",
+                        "GOOGLE_STT_TIMEOUT = 20",
                         "GPT4FREE_SERVERS_STATUS = Active",
                     ]
                 )
             )
             (user_datas / "conf.trinity").write_text(
-                "OPENAI_MODEL = user-model\nOPENAI_TIMEOUT = 4\nGPT4FREE_SERVERS_STATUS = None\n"
+                "OPENAI_MODEL = user-model\nOPENAI_TIMEOUT = 4\nGOOGLE_STT_TIMEOUT = 8\nGPT4FREE_SERVERS_STATUS = None\n"
             )
             original_home = os.environ.get("HOME")
             missing = object()
@@ -2187,6 +2294,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
             self.assertEqual("user-model", trinitty.OPENAI_MODEL)
             self.assertEqual(4.0, trinitty.OPENAI_TIMEOUT)
+            self.assertEqual(8.0, trinitty.GOOGLE_STT_TIMEOUT)
             self.assertIsNone(trinitty.GPT4FREE_SERVERS_STATUS)
 
     def test_getconf_accepts_quoted_gpt4free_provider_list(self):

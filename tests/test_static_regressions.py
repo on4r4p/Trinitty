@@ -85,9 +85,11 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
 
     def test_install_dependencies_creates_clean_user_launcher(self):
         installer = (ROOT / "install_dependencies.sh").read_text()
+        pyproject = (ROOT / "pyproject.toml").read_text()
 
         self.assertIn("install_user_launcher()", installer)
         self.assertIn("--no-launcher", installer)
+        self.assertIn('"trinitty" = ["install_dependencies.sh"]', pyproject)
         self.assertIn("export PYTHONNOUSERSITE=1", installer)
         self.assertIn("unset PYTHONPATH", installer)
         self.assertIn('"$launcher_dir/$LAUNCHER_NAME"', installer)

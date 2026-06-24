@@ -28,7 +28,7 @@ from datetime import datetime
 from shutil import copy2, move, which
 
 from queue import Empty, Queue
-from threading import Event, Thread
+from threading import Event, Thread, current_thread, main_thread
 from contextlib import contextmanager
 
 from itertools import product
@@ -696,6 +696,7 @@ COMMAND_CLASSIFIER_MODEL = None
 STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
 STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
+GOOGLE_STT_TIMEOUT = 20.0
 RESULTS_HUB_MAX_ATTEMPTS = 2
 RESULTS_HUB_CONTINUE = object()
 GPT4FREE_COOKIES_LOADED = False
@@ -1448,6 +1449,44 @@ def Config_Bool(value, default=False):
     if value in ["false", "0", "no", "n", "off", "none"]:
         return False
     return default
+
+
+def Config_Positive_Float(value, default):
+    try:
+        parsed = float(value)
+    except Exception:
+        return default
+    return parsed if parsed > 0 else default
+
+
+@contextmanager
+def Runtime_Timeout(seconds, label):
+    timeout = Config_Positive_Float(seconds, 0)
+    can_use_alarm = (
+        timeout > 0
+        and hasattr(signal, "SIGALRM")
+        and hasattr(signal, "setitimer")
+        and current_thread() is main_thread()
+    )
+    if not can_use_alarm:
+        yield
+        return
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+
+    def timeout_handler(_signum, _frame):
+        raise TimeoutError("%s timeout after %.1f seconds" % (label, timeout))
+
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.setitimer(signal.ITIMER_REAL, timeout)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
 
 
 def Saved_Answer_Path(*parts):
@@ -5601,18 +5640,23 @@ def Speech_To_Text(audio):
 
     Err_msg = ""
     try:
-        client = speech.SpeechClient()
-        to_txt = speech.RecognitionAudio(content=audio)
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            #        max_alternatives=3,
-            enable_word_confidence=True,
-            enable_automatic_punctuation=True,
-            sample_rate_hertz=16000,
-            audio_channel_count=1,
-            language_code="fr-FR",
-        )
-        google_stt = client.recognize(request={"config": config, "audio": to_txt})
+        stt_timeout = Config_Positive_Float(globals().get("GOOGLE_STT_TIMEOUT", 20.0), 20.0)
+        PRINT("\n-Trinitty:Speech_To_Text timeout:%s" % stt_timeout)
+        with Runtime_Timeout(stt_timeout, "Google Speech-to-Text"):
+            PRINT("\n-Trinitty:Speech_To_Text init Google client")
+            client = speech.SpeechClient()
+            to_txt = speech.RecognitionAudio(content=audio)
+            config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                #        max_alternatives=3,
+                enable_word_confidence=True,
+                enable_automatic_punctuation=True,
+                sample_rate_hertz=16000,
+                audio_channel_count=1,
+                language_code="fr-FR",
+            )
+            PRINT("\n-Trinitty:Speech_To_Text recognize")
+            google_stt = client.recognize(request={"config": config, "audio": to_txt}, timeout=stt_timeout)
     except Exception as e:
         Err_msg = "Speech_To_Text:" + str(e)
         Log_Error("Speech_To_Text", e)
@@ -7677,6 +7721,7 @@ def GetConf():
     global OPENAI_TIMEOUT
     global OPENAI_INSTRUCTIONS
     global SPACY_MODEL
+    global GOOGLE_STT_TIMEOUT
     global GOOGLE_SORT_BY_DATE
     global CHECK_UPDATE
     global CMD_DBG
@@ -7701,6 +7746,7 @@ def GetConf():
         "OPENAI_TIMEOUT",
         "OPENAI_INSTRUCTIONS",
         "SPACY_MODEL",
+        "GOOGLE_STT_TIMEOUT",
         "GOOGLE_SORT_BY_DATE",
         "GPT4FREE_SERVERS_LIST",
         "GPT4FREE_SERVERS_STATUS",
@@ -7818,6 +7864,9 @@ def GetConf():
                 if conf:
                     SPACY_MODEL = conf
 
+            elif option == "GOOGLE_STT_TIMEOUT":
+                GOOGLE_STT_TIMEOUT = Config_Positive_Float(conf, 20.0)
+
             elif option == "GOOGLE_SORT_BY_DATE":
                 GOOGLE_SORT_BY_DATE = Config_Bool(conf, default=False)
 
@@ -7916,6 +7965,7 @@ OPENAI_API_KEY_FILE = keys/openai.key
 OPENAI_TIMEOUT = 30
 OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
 SPACY_MODEL = fr_core_news_md
+GOOGLE_STT_TIMEOUT = 20
 GOOGLE_SORT_BY_DATE = False
 GPT4FREE_SERVERS_LIST = None #[g4f.Provider.PROVIDERNAME1,g4f.Provider.PROVIDERNAME2] or None
 GPT4FREE_SERVERS_STATUS = Active #Active or Unknown or All or None
@@ -7952,6 +8002,7 @@ XCB_ERROR_FIX = False #Fix Xcb error from popping due to DISPLAY env variable.""
         OPENAI_TIMEOUT = 30
         OPENAI_INSTRUCTIONS = "Reponds en francais de facon concise et naturelle."
         SPACY_MODEL = "fr_core_news_md"
+        GOOGLE_STT_TIMEOUT = 20.0
         GOOGLE_SORT_BY_DATE = False
         GPT4FREE_SERVERS_LIST = None
         SEARCH_DBG = False
@@ -8143,6 +8194,7 @@ if __name__ == "__main__":
     OPENAI_TIMEOUT = 30
     OPENAI_INSTRUCTIONS = "Reponds en francais de facon concise et naturelle."
     SPACY_MODEL = "fr_core_news_md"
+    GOOGLE_STT_TIMEOUT = 20.0
     GOOGLE_SORT_BY_DATE = False
     CHECK_UPDATE = False
     DEBUG = False
@@ -8236,6 +8288,7 @@ if __name__ == "__main__":
     PRINT("-Trinitty:OPENAI_API_KEY_FILE:%s" % OPENAI_API_KEY_FILE)
     PRINT("-Trinitty:OPENAI_TIMEOUT:%s" % OPENAI_TIMEOUT)
     PRINT("-Trinitty:SPACY_MODEL:%s" % SPACY_MODEL)
+    PRINT("-Trinitty:GOOGLE_STT_TIMEOUT:%s" % GOOGLE_STT_TIMEOUT)
     PRINT("-Trinitty:GOOGLE_SORT_BY_DATE:%s" % GOOGLE_SORT_BY_DATE)
     PRINT("-Trinitty:GPT4FREE_SERVERS_LIST:%s" % GPT4FREE_SERVERS_LIST)
     PRINT("-Trinitty:GPT4FREE_SERVERS_STATUS:%s" % GPT4FREE_SERVERS_STATUS)
