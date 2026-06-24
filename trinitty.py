@@ -376,10 +376,11 @@ class MissingDependency:
         self.error = error
 
     def _raise(self):
-        raise ModuleNotFoundError(
-            "Missing optional dependency '%s'. Install Trinitty dependencies with ./install_dependencies.sh."
-            % self.package_name
-        ) from self.error
+        message = "Optional dependency '%s' is unavailable." % self.package_name
+        if self.error:
+            message += " Import error: %s" % self.error
+        message += " Install Trinitty dependencies with ./install_dependencies.sh."
+        raise ModuleNotFoundError(message) from self.error
 
     def __getattr__(self, name):
         self._raise()
@@ -5555,22 +5556,23 @@ def Speech_To_Text(audio):
     PRINT("\n-Trinitty:Dans la fonction Speech_To_Text")
 
     Err_msg = ""
-    client = speech.SpeechClient()
-    to_txt = speech.RecognitionAudio(content=audio)
-    config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-        #        max_alternatives=3,
-        enable_word_confidence=True,
-        enable_automatic_punctuation=True,
-        sample_rate_hertz=16000,
-        audio_channel_count=1,
-        language_code="fr-FR",
-    )
     try:
+        client = speech.SpeechClient()
+        to_txt = speech.RecognitionAudio(content=audio)
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            #        max_alternatives=3,
+            enable_word_confidence=True,
+            enable_automatic_punctuation=True,
+            sample_rate_hertz=16000,
+            audio_channel_count=1,
+            language_code="fr-FR",
+        )
         google_stt = client.recognize(request={"config": config, "audio": to_txt})
     except Exception as e:
-        PRINT("\n-Trinitty:Error:%s" % str(e))
         Err_msg = "Speech_To_Text:" + str(e)
+        Log_Error("Speech_To_Text", e)
+        PRINT("\n-Trinitty:Error:%s" % str(e))
     #    PRINT("google_stt %s:\n%s"%(type(google_stt),google_stt))
 
     transcripts = ""

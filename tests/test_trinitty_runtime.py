@@ -1914,6 +1914,28 @@ class TrinittyRuntimeTests(unittest.TestCase):
             ),
         )
 
+    def test_speech_to_text_returns_error_when_google_speech_import_is_broken(self):
+        reset_command_state()
+        original_speech = trinitty.speech
+        trinitty.Runtime_Errors = []
+        trinitty.speech = trinitty.MissingDependency(
+            "google.cloud.speech_v1p1beta1",
+            "google-cloud-speech",
+            ValueError("bad marshal data (invalid reference)"),
+        )
+        try:
+            transcripts, confidence, words, words_confidence, err_msg = trinitty.Speech_To_Text(b"audio")
+        finally:
+            trinitty.speech = original_speech
+
+        self.assertEqual("", transcripts)
+        self.assertEqual(0, confidence)
+        self.assertEqual([], words)
+        self.assertEqual([], words_confidence)
+        self.assertIn("Speech_To_Text:", err_msg)
+        self.assertIn("bad marshal data", err_msg)
+        self.assertEqual("Speech_To_Text", trinitty.Runtime_Errors[-1]["context"])
+
     def test_interpretor_mode_skips_pico_key_loading(self):
         reset_command_state()
         trinitty.INTERPRETOR = True
