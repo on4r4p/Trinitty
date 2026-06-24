@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+.venv*/
+.venv-trinitty/
+venv/
+env/
+
+# Editor and swap files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Local runtime output
+tmp/
+errtrin
+out.wav
+tools/*.wav
+*.log
+trinitty.py.save
+trinitty.py.save.*
+*.save
+*.save.*
+*.old
+old/
+
+# Private credentials and local config
+keys/*
+!keys/placeholder
+!keys/.gitkeep
+datas/conf.local.trinity
+datas/*.local.trinity
+datas/conf.trinity.priv
+datas/command_classifier.keras
+datas/har_and_cookies/*
+!datas/har_and_cookies/placeholder
+
+# Runtime browser/cookie captures
+tools/har_and_cookies/
+
+# Generated conversation history
+history/*
+!history/placeholder
+!history/.gitkeep
+tools/tool_history/*
+!tools/tool_history/*.py
+!tools/tool_history/.gitkeep
+tools/tool_history/history/
+tools/tool_history/old_history/
+
+# Generated saved-answer diagnostics
+local_sounds/saved_answer/saved_error/

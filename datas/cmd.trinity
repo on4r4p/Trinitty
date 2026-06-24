@@ -5,8 +5,8 @@ F_trinity_name,c'est quoi*ton *nom
 F_trinity_name,c'est quoi*votre *nom
 F_trinity_name,quel*ton nom
 F_trinity_name,quel*votre nom
-F_trinity_mean,pourquoi*tu*appel*trinity
-F_trinity_mean,pourquoi*vous*trinity
+F_trinity_mean,pourquoi*tu*appel*trinitty
+F_trinity_mean,pourquoi*vous*trinitty
 F_trinity_mean,pourquoi*t'appelles*comme ca
 F_trinity_mean,pourquoi*vous*appelez*comme ca
 F_trinity_mean,pourquoi*t'a*ce *nom
@@ -71,7 +71,7 @@ F_prompt,je*de vous ecrire
 F_prompt,interpreteur
 F_trinity_script,affiche ton code source
 F_trinity_script,affichez votre code source
-F_trinity_script,script trinity
+F_trinity_script,script trinitty
 F_rnd,choix aleatoire
 F_rnd,entre oui et non
 F_repeat,tu peux*repete
@@ -102,6 +102,7 @@ F_show_history,affiche l'historique
 F_search_history,[rappelle{s-tu/ toi/}/souviens{-tu/ toi/}/sais{-tu/}]*[deja {parle/discute}]*[avec toi/avec vous/ensemble/][ historique/] 
 F_search_history,[pag{e /es }/inf{o /os }/resultat{s /}]*[parl{e /ent /ant /eraient }/concern{e /ent /eraient }/en rapport ]*[ historique/]
 F_search_history,[cherche{r/z/-moi}/trouve{r/z/-moi}/regarde{r/z/-moi}/verifie{r/z/-moi}] * dans l'historique
+F_delete_last_history,[efface/supprime/retire] [la/] derniere [entree/reponse] [de/] [l']historique
 F_read_link,[ ce que contient / le contenu / ce qu*il*y*a{ dans / sur }/ ce qu*il*y*a{ dans / sur }/ ce qu*ya{ dans / sur }][*/ce /cette /un /une ] [*/page internet / page web / url/ site internet/ site web]
 F_read_link,l'interrieur
 F_play_audio,fichier*audio

@@ -78,6 +78,8 @@ stopper,stoppes,stoppez,stopperais,stopperiez,stoppes,stoppiez,stoppant,-moi,-tu
 quitter,quittes,quittez,quitterais,quitteriez,quittes,quittiez,quittant,-moi,-tu,-vous,F_wait
 laisser,laisse,laissez,laisserais,laisseriez,laisses,laissiez,laissant,-moi,-tu,-vous,F_wait
 arreter,arrete,arretez,arreterais,arreteriez,arretes,arretiez,arretant,-moi,-tu,-vous,F_wait
+effacer,efface,effacez,effacerais,effaceriez,effaces,effaciez,effacant,-moi,-tu,-vous,F_delete_last_history
+supprimer,supprime,supprimez,supprimerais,supprimeriez,supprimes,supprimiez,supprimant,-moi,-tu,-vous,F_delete_last_history
 repeter,repete,repetez,repeterais,repeteriez,repetes,repetiez,repetant,-moi,-tu,-vous,F_repeat
 entendre,entends,entendez,entendrais,entendriez,entendes,entendiez,entendant,-moi,-tu,-vous,F_repeat
 comprendre,comprends,comprenez,comprendrais,comprendriez,comprennes,compreniez,comprenant,-moi,-tu,-vous,F_repeat

@@ -1,0 +1,117 @@
+# DONE - reparer la boucle sur la rotation des serveurs g4f.
+#   Test: test_freegpt_does_not_loop_forever_when_all_providers_blacklisted
+#
+# DONE - reparer la boucle "que voulez vous faire de ces resultats".
+#   La boucle Results_Hub est bornee par RESULTS_HUB_MAX_ATTEMPTS.
+#
+# DONE - ameliorer l'historique: le choix des resultats correspond maintenant a l'affichage utilisateur.
+#   Test: test_results_hub_selection_uses_human_numbering
+#
+# DONE - le declencheur fwait contenant le mot "seconde" ne doit plus etre interprete comme un choix de resultat.
+#   Test: test_results_hub_does_not_select_result_from_wait_duration
+#
+# DONE - lire mp3 aussi.
+#   Play_Response utilise aplay pour les wav et sox/play pour mp3/ogg/flac.
+#
+# DONE - trouver une solution quand un wav saved answer n'est pas trouve.
+#   Save_History garde un placeholder d'erreur au lieu de planter.
+#
+# DONE - la commande lire une page web est reconnue quand une URL est donnee directement a l'interpreteur.
+#   Test: test_command_routes_direct_url_without_destroying_punctuation
+#
+# DONE - differencier les providers g4f texte des providers image/audio.
+#   Le filtrage des providers verifie les capacites texte/chat avant de remplir GPT4FREE_SERVERS_LIST.
+#
+# DONE - ajouter des moyens de connexion a des serveurs legit.
+#   OpenAI API est prioritaire si une cle est disponible; g4f reste le fallback.
+#
+# DONE - tester les imports/modules pip optionnels: selenium-wire, undetected_chromedriver, platformdirs.
+#   Ils sont declares en dependances optionnelles navigateur.
+#
+# DONE - ajouter une option de config pour auto reject les serveurs marques notworking.
+#   Config: GPT4FREE_AUTO_REJECT_NOTWORKING
+#   Test: test_gpt4free_auto_reject_notworking_is_configurable
+#
+# DONE - dans la def google ajouter le tri par date configurable.
+#   Config: GOOGLE_SORT_BY_DATE
+#   Test: test_google_custom_search_can_sort_by_date
+#
+# DONE - effacer la derniere entree historique.
+#   Commande: F_delete_last_history
+#   Test: test_delete_last_history_entry_removes_latest_row
+#
+# DONE - choix aleatoire.
+#   F_rnd choisit un resultat au hasard dans Results_Hub.
+#   Test: test_results_hub_random_reads_one_random_result
+#
+# DONE - fix get title wiki.
+#   GetTitleLink ne plante plus si Google Custom Search echoue avant de definir un titre.
+#   Test: test_get_title_link_falls_back_when_custom_search_non_200
+#
+# DONE - recuperer les erreurs dans une liste et les ecrire dans un log.
+#   Log_Error alimente Runtime_Errors et saved_error/trinitty.errors.
+#   Test: test_log_error_records_list_and_file
+#
+# DONE - la fonction Fwait plante.
+#   Wait() utilise maintenant le prompt en mode interpreteur, a un timeout en mode vocal, et libere les ressources audio.
+#   Tests: test_wait_uses_prompt_directly_in_interpretor_mode, test_wait_times_out_without_blocking_forever
+#
+# DONE - rendre recursive la special syntax.
+#   Les crochets imbriques comme [a [b/c]/d] sont maintenant expanses.
+#   Test: test_special_syntax_expands_nested_brackets
+#
+# DONE - faire en sorte que Trinitty connaisse son script et puisse en parler/proposer des ameliorations.
+#   Trinitty_Script_Profile analyse trinitty.py et TODO, puis Trinitty_Script_Text produit un resume et une suggestion.
+#   Test: test_trinitty_script_profile_describes_script_and_todo
+#
+# DONE - quand Trinitty ne comprend pas une phrase, permettre une correction directe.
+#   Bad_Confidence ouvre une correction clavier directe en mode interpreteur.
+#   Test: test_bad_confidence_interpretor_accepts_direct_correction
+#
+# DONE - ameliorer le systeme de confiance de reconnaissance vocale.
+#   Check_Transcript utilise des seuils explicites et la confiance moyenne des mots quand le transcript n'a pas de score.
+#   Tests: test_check_transcript_uses_word_confidence_when_transcript_confidence_missing, test_check_transcript_rejects_low_word_confidence_even_when_transcript_is_high
+#
+# DONE - prendre en compte la position des mots dans le test de reconnaissance de commande.
+#   SeeknReturn respecte l'ordre des mots des triggers a etoiles.
+#   Test: test_seeknreturn_respects_trigger_word_order
+#
+# DONE - simuler une conversation.
+#   Simulate_Conversation rejoue des entrees avec responder injecte, sans appeler le reseau ni executer les commandes par defaut.
+#   Tests: test_simulate_conversation_uses_injected_responder_without_command_side_effects, test_simulate_conversation_can_execute_commands_when_requested
+#
+# DONE - Recheck addtrigger apres l'ajout de nouvelles fonctions.
+#   Add_Trigger propose maintenant F_sort_results et un test statique compare les fonctions CSV avec l'aide Add_Trigger.
+#   Test: test_add_trigger_help_covers_declared_command_functions
+#
+# DONE - faire push to talk.
+#   PUSH_TO_TALK remplace le wake word par "Entree puis Speech_To_Text".
+#   Tests: test_push_to_talk_waits_for_enter_then_records, test_trinitty_routes_wakeme_to_push_to_talk_when_enabled
+#
+# DONE - possibilite d'arreter Trinitty pendant qu'elle parle avec une commande vocale.
+#   Play_Response lance un listener vocal pendant les reponses/fichiers audio et annule aplay/play via cancel_operation sur F_wait/F_quit.
+#   Tests: test_playback_interrupt_listener_cancels_on_voice_stop_command, test_run_playback_command_stops_process_when_cancelled, test_play_response_starts_interrupt_listener_around_playback
+#
+# DONE - entrainer Trinitty avec TensorFlow pour verifier si un input correspond a une commande.
+#   TensorFlow est optionnel via ./install_dependencies.sh --with-command-classifier; Train_Command_Classifier entraine un modele texte et Commandes peut filtrer via COMMAND_CLASSIFIER_ENABLED.
+#   Tests: test_train_command_classifier_uses_tensorflow_when_available, test_command_classifier_allows_command_uses_model_threshold, test_commandes_rejects_before_ambiguity_when_classifier_says_no
+#
+# DONE - se renseigner sur gpt4all.
+#   GPT4All fournit un SDK Python local/offline via pip install gpt4all.
+#   Exemple officiel: GPT4All("Meta-Llama-3-8B-Instruct.Q4_0.gguf") telecharge/charge un modele d'environ 4.66 GB et demande environ 8 GB de RAM.
+#   Sources: https://docs.gpt4all.io/gpt4all_python/home.html et https://github.com/nomic-ai/gpt4all
+#   Reste a decider avant integration: modele par defaut, dossier de stockage, ordre de fallback OpenAI/GPT4All/g4f.
+
+# DONE - changer le nom de certaines variables pour eviter la confusion.
+#   Les references actives au module Trinity.py/trinity.py sont supprimees; les identifiants F_trinity_* restent conserves comme IDs de donnees CSV/sons.
+#
+# DONE - Trim the fat aussi ailleurs.
+#   Suppression des commentaires obsoletes vers l'ancien modele Trinity_en_linux; le gros refactoring reste hors scope sans cible plus precise.
+#
+# DONE - chopper les cookies pour les providers qui le demandent.
+#   Trinitty synchronise les captures har/json de tools/har_and_cookies vers datas/har_and_cookies avant g4f.cookies.read_cookie_files.
+#   Tests: test_sync_gpt4free_cookie_captures_copies_har_and_json, test_load_gpt4free_cookies_syncs_then_loads_cookie_files
+#
+# DONE - gerer les providers demandant une authentification.
+#   Les providers g4f needs_auth ne sont retenus en mode auth_only/all que si un cookie/har ou keys/g4f_<provider>.key/env token existe.
+#   Test: test_gpt4free_auth_provider_requires_cookie_or_key

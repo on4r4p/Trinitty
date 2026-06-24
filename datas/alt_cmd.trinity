@@ -7,3 +7,5 @@ affiche-moi l'historique,F_show_history
 affiche moi l'historique,F_show_history
 ouvre-moi l'historique,F_show_history
 ouvre moi l'historique,F_show_history
+efface la derniere entree de l'historique,F_delete_last_history
+supprime la derniere entree de l'historique,F_delete_last_history

@@ -1,0 +1,119 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trinitty"
+version = "0.1.1"
+description = "Personal voice assistant using OpenAI, g4f fallback providers, Google Cloud speech services, and local audio assets."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "on4r4p" },
+]
+keywords = ["voice-assistant", "openai", "g4f", "speech-to-text", "text-to-speech"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+  "g4f>=6.6,<7",
+  "openai>=2.0,<3",
+  "PyAudio>=0.2.13",
+  "pvporcupine>=3.0.0,<4.0.0",
+  "webrtcvad-wheels>=2.0.14",
+  "requests>=2.31",
+  "sox>=1.5",
+  "spacy>=3.7,<4",
+  "detectlanguage>=2.0",
+  "deep-translator>=1.11",
+  "nltk>=3.8",
+  "urlextract>=1.9",
+  "beautifulsoup4>=4.12",
+  "PyGithub>=2.3",
+  "Unidecode>=1.3",
+  "googlesearch-python>=1.3",
+  "wikipedia>=1.4",
+  "google-cloud-texttospeech>=2.16",
+  "google-cloud-speech>=2.26",
+  "google-cloud-language>=2.13",
+  "google-cloud-translate>=3.15",
+]
+
+[project.optional-dependencies]
+browser-providers = [
+  "platformdirs>=4.2",
+  "selenium-wire>=5.1",
+  "undetected-chromedriver>=3.5",
+]
+command-classifier = [
+  "tensorflow",
+]
+dev = [
+  "build>=1.2",
+  "ruff>=0.5",
+  "twine>=5.1",
+]
+
+[project.scripts]
+trinitty = "trinitty:main"
+
+[project.urls]
+Homepage = "https://github.com/on4r4p/trinitty"
+Repository = "https://github.com/on4r4p/trinitty"
+Issues = "https://github.com/on4r4p/trinitty/issues"
+
+[tool.setuptools]
+py-modules = ["trinitty"]
+
+[tool.setuptools.data-files]
+"trinitty/datas" = [
+  "datas/action.trinity",
+  "datas/alt_cmd.trinity",
+  "datas/alt_trigger.trinity",
+  "datas/cmd.trinity",
+  "datas/conf.trinity",
+  "datas/numbers.trinity",
+  "datas/prefix.trinity",
+  "datas/synonym.trinity",
+]
+"trinitty/datas/har_and_cookies" = ["datas/har_and_cookies/placeholder"]
+"trinitty/models" = ["models/*.ppn", "models/*.pv"]
+"trinitty/local_sounds/already" = ["local_sounds/already/*.wav"]
+"trinitty/local_sounds/badconf" = ["local_sounds/badconf/*.wav"]
+"trinitty/local_sounds/boot" = ["local_sounds/boot/*.wav"]
+"trinitty/local_sounds/cmd" = ["local_sounds/cmd/*.wav"]
+"trinitty/local_sounds/cmd/triggers" = ["local_sounds/cmd/triggers/*.wav"]
+"trinitty/local_sounds/dates" = ["local_sounds/dates/*.wav"]
+"trinitty/local_sounds/dates/centaines" = ["local_sounds/dates/centaines/*.wav"]
+"trinitty/local_sounds/dates/jours" = ["local_sounds/dates/jours/*.wav"]
+"trinitty/local_sounds/dates/milliers" = ["local_sounds/dates/milliers/*.wav"]
+"trinitty/local_sounds/dates/mois" = ["local_sounds/dates/mois/*.wav"]
+"trinitty/local_sounds/dates/nombres" = ["local_sounds/dates/nombres/*.wav"]
+"trinitty/local_sounds/errors" = ["local_sounds/errors/*.wav"]
+"trinitty/local_sounds/forgot" = ["local_sounds/forgot/*.wav"]
+"trinitty/local_sounds/history" = ["local_sounds/history/*.wav"]
+"trinitty/local_sounds/merci" = ["local_sounds/merci/*.wav"]
+"trinitty/local_sounds/noinput" = ["local_sounds/noinput/*.wav"]
+"trinitty/local_sounds/notok" = ["local_sounds/notok/*.wav"]
+"trinitty/local_sounds/ok" = ["local_sounds/ok/*.wav"]
+"trinitty/local_sounds/ouinon" = ["local_sounds/ouinon/*.wav"]
+"trinitty/local_sounds/prompt" = ["local_sounds/prompt/*.wav"]
+"trinitty/local_sounds/providers" = ["local_sounds/providers/*.wav"]
+"trinitty/local_sounds/question" = ["local_sounds/question/*.wav"]
+"trinitty/local_sounds/quit" = ["local_sounds/quit/*.wav"]
+"trinitty/local_sounds/repeat" = ["local_sounds/repeat/*.wav"]
+"trinitty/local_sounds/saved_answer" = ["local_sounds/saved_answer/*.wav"]
+"trinitty/local_sounds/server" = ["local_sounds/server/*.wav"]
+"trinitty/local_sounds/trad" = ["local_sounds/trad/*.wav"]
+"trinitty/local_sounds/wait" = ["local_sounds/wait/*.wav"]
+"trinitty/local_sounds/wakesounds" = ["local_sounds/wakesounds/*.wav"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
