@@ -13,8 +13,11 @@ INSTALL_NLTK_DATA=1
 INSTALL_SPACY_MODEL=1
 INSTALL_COMMAND_CLASSIFIER=0
 INSTALL_DEV_TOOLS=1
+INSTALL_LAUNCHER=1
 VERIFY_IMPORTS=1
 VENV_DIR_EXPLICIT=0
+LAUNCHER_DIR="${LAUNCHER_DIR:-$HOME/.local/bin}"
+LAUNCHER_NAME="${LAUNCHER_NAME:-trinitty}"
 
 usage() {
   cat <<'EOF'
@@ -31,6 +34,8 @@ Options:
   --with-command-classifier
                          Install optional TensorFlow command-classifier dependencies.
   --no-dev-tools         Skip packaging/lint tools: build, twine, ruff.
+  --no-launcher          Do not install the user launcher in ~/.local/bin.
+  --launcher-dir DIR     Install the user launcher in DIR. Default: ~/.local/bin
   --no-verify            Skip import and command checks at the end.
   -h, --help             Show this help.
 
@@ -71,6 +76,17 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-dev-tools)
       INSTALL_DEV_TOOLS=0
+      ;;
+    --no-launcher)
+      INSTALL_LAUNCHER=0
+      ;;
+    --launcher-dir)
+      shift
+      LAUNCHER_DIR="${1:-}"
+      if [[ -z "$LAUNCHER_DIR" ]]; then
+        echo "Missing value for --launcher-dir" >&2
+        exit 2
+      fi
       ;;
     --no-verify)
       VERIFY_IMPORTS=0
@@ -285,6 +301,56 @@ for source in links:
 PY
 }
 
+expand_user_path() {
+  local path="$1"
+  case "$path" in
+    "~")
+      printf '%s\n' "$HOME"
+      ;;
+    "~/"*)
+      printf '%s\n' "$HOME/${path#~/}"
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
+shell_quote() {
+  printf '%q' "$1"
+}
+
+install_user_launcher() {
+  if [[ "$INSTALL_LAUNCHER" -ne 1 ]]; then
+    return
+  fi
+
+  local launcher_dir launcher_path python_target script_target
+  launcher_dir="$(expand_user_path "$LAUNCHER_DIR")"
+  launcher_path="$launcher_dir/$LAUNCHER_NAME"
+  python_target="$PYTHON_BIN"
+  script_target="$ROOT_DIR/trinitty.py"
+
+  mkdir -p "$launcher_dir"
+  cat > "$launcher_path" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
+
+exec $(shell_quote "$python_target") $(shell_quote "$script_target") "\$@"
+EOF
+  chmod +x "$launcher_path"
+
+  echo "Installed Trinitty launcher: $launcher_path"
+  echo "Launcher target: $python_target $script_target"
+  case ":$PATH:" in
+    *":$launcher_dir:"*) ;;
+    *) echo "Warning: $launcher_dir is not in PATH. Add it to PATH to run '$LAUNCHER_NAME' directly." >&2 ;;
+  esac
+}
+
 if [[ "$INSTALL_SYSTEM" -eq 1 ]]; then
   install_system_dependencies
 fi
@@ -414,5 +480,7 @@ print("Optional command classifier dependency OK: tensorflow")
 PY
   fi
 fi
+
+install_user_launcher
 
 echo "Dependency installation finished."

@@ -8,6 +8,7 @@ import os
 import random
 import re
 import runpy
+import shlex
 import signal
 import site
 import string
@@ -137,6 +138,46 @@ def Existing_Config_File(relative_path):
     return ""
 
 
+def Packaged_Config_File():
+    return os.path.join(globals().get("SCRIPT_PATH", Default_Script_Path()), "datas", "conf.trinity")
+
+
+def Default_User_Launcher_Path():
+    return os.path.join(os.path.expanduser("~"), ".local", "bin", "trinitty")
+
+
+def Install_User_Launcher(launcher_path=None, python_bin=None):
+    launcher_path = launcher_path or Default_User_Launcher_Path()
+    python_bin = python_bin or sys.executable
+    os.makedirs(os.path.dirname(launcher_path), exist_ok=True)
+    launcher = """#!/usr/bin/env bash
+set -Eeuo pipefail
+
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
+
+exec %s -m trinitty "$@"
+""" % shlex.quote(os.path.abspath(python_bin))
+    with open(launcher_path, "w") as f:
+        f.write(launcher)
+    os.chmod(launcher_path, 0o700)
+    print("\n-Trinitty:Lanceur installé: %s" % launcher_path)
+    print("-Trinitty:Commande cible: %s -m trinitty" % os.path.abspath(python_bin))
+    if os.path.dirname(launcher_path) not in os.environ.get("PATH", "").split(os.pathsep):
+        print("-Trinitty:Ajoutez ce dossier au PATH si la commande trinitty n'est pas trouvée.")
+    return launcher_path
+
+
+def Handle_Utility_Args():
+    if len(sys.argv) < 2:
+        return False
+    command = sys.argv[1]
+    if command == "--install-launcher":
+        Install_User_Launcher()
+        return True
+    return False
+
+
 def Write_File_If_Missing(filepath, content, mode=None):
     if os.path.exists(filepath):
         return False
@@ -187,6 +228,7 @@ def Initialize_User_Data():
     if created:
         print("\n-Trinitty:Configuration utilisateur initialisée dans %s" % root)
     print("\n-Trinitty:Dossier utilisateur: %s" % root)
+    print("-Trinitty:Configuration package: %s" % Packaged_Config_File())
     print("-Trinitty:Configuration modifiable: %s" % user_conf)
     return root
 
@@ -194,6 +236,9 @@ def Initialize_User_Data():
 def User_Config_Template():
     return """# Overrides locaux de Trinitty.
 # Ce fichier est lu apres la configuration fournie avec le package.
+# Configuration fournie avec le package:
+# %s
+# Les valeurs ci-dessous remplacent celles du fichier ci-dessus.
 # Les fichiers existants ne sont pas ecrases par Trinitty.
 
 SAVED_ANSWER = default
@@ -210,7 +255,7 @@ PUSH_TO_TALK = False
 GPT4FREE_SERVERS_LIST = None
 GPT4FREE_SERVERS_STATUS = Active
 GPT4FREE_SERVERS_AUTH = False
-"""
+""" % Packaged_Config_File()
 
 
 def User_Keys_Readme_Template():
@@ -7888,10 +7933,14 @@ def Check_Update():
 
 
 def main():
+    if Handle_Utility_Args():
+        return
     runpy.run_path(os.path.abspath(__file__), run_name="__main__")
 
 
 if __name__ == "__main__":
+    if Handle_Utility_Args():
+        sys.exit(0)
 
     SCRIPT_PATH = Default_Script_Path()
     SCRIPT_PATH = SCRIPT_PATH.removesuffix(".")

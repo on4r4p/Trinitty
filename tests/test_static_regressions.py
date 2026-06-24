@@ -83,6 +83,15 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
         self.assertTrue((ROOT / "keys" / ".gitkeep").exists())
         self.assertTrue((ROOT / "history" / ".gitkeep").exists())
 
+    def test_install_dependencies_creates_clean_user_launcher(self):
+        installer = (ROOT / "install_dependencies.sh").read_text()
+
+        self.assertIn("install_user_launcher()", installer)
+        self.assertIn("--no-launcher", installer)
+        self.assertIn("export PYTHONNOUSERSITE=1", installer)
+        self.assertIn("unset PYTHONPATH", installer)
+        self.assertIn('"$launcher_dir/$LAUNCHER_NAME"', installer)
+
     def test_pyproject_packages_all_local_sound_wavs(self):
         pyproject = (ROOT / "pyproject.toml").read_text()
         patterns = re.findall(r'"(local_sounds/[^"]+\.wav)"', pyproject)

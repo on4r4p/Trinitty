@@ -136,7 +136,13 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     "OPENAI_API_KEY_FILE = keys/openai.key",
                     (user_root / "datas" / "conf.trinity").read_text(),
                 )
+                self.assertIn(
+                    "Configuration fournie avec le package:",
+                    (user_root / "datas" / "conf.trinity").read_text(),
+                )
+                self.assertIn(trinitty.Packaged_Config_File(), (user_root / "datas" / "conf.trinity").read_text())
                 self.assertIn("Dossier utilisateur: %s" % user_root, output.getvalue())
+                self.assertIn("Configuration package: %s" % trinitty.Packaged_Config_File(), output.getvalue())
                 self.assertIn(
                     "Configuration modifiable: %s" % (user_root / "datas" / "conf.trinity"),
                     output.getvalue(),
@@ -155,6 +161,24 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     os.environ.pop("HOME", None)
                 else:
                     os.environ["HOME"] = original_home
+
+    def test_install_user_launcher_writes_clean_environment_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            launcher_path = Path(tmp) / "bin" / "trinitty"
+            python_bin = Path(tmp) / "test venv" / "bin" / "python"
+            installed = Path(
+                trinitty.Install_User_Launcher(
+                    launcher_path=str(launcher_path),
+                    python_bin=str(python_bin),
+                )
+            )
+
+            self.assertEqual(launcher_path, installed)
+            self.assertTrue(os.access(launcher_path, os.X_OK))
+            content = launcher_path.read_text()
+            self.assertIn("export PYTHONNOUSERSITE=1", content)
+            self.assertIn("unset PYTHONPATH", content)
+            self.assertIn("'%s' -m trinitty" % python_bin, content)
 
     def test_initialize_user_data_migrates_legacy_user_local_config(self):
         with tempfile.TemporaryDirectory() as tmp:

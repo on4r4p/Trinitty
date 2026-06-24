@@ -29,7 +29,19 @@ Sur Debian/Ubuntu, Trinitty a aussi besoin de dépendances système pour l'audio
 sudo apt-get install -y alsa-utils build-essential flac libasound2-dev libsox-fmt-all libttspico-utils portaudio19-dev python3-dev python3-venv sox
 ```
 
-Lance ensuite:
+Lancer ensuite:
+
+```bash
+trinitty
+```
+
+Pour une installation dans un virtualenv comme `~/venvs/trinitty`, il est possible d'installer un lanceur utilisateur une seule fois:
+
+```bash
+~/venvs/trinitty/bin/trinitty --install-launcher
+```
+
+Le lanceur est créé dans `~/.local/bin/trinitty`. Il active automatiquement l'environnement propre nécessaire (`PYTHONNOUSERSITE=1`, `PYTHONPATH` vidé), ce qui permet ensuite de lancer simplement:
 
 ```bash
 trinitty
@@ -41,10 +53,9 @@ Depuis un checkout local, l'installateur crée ou réutilise un virtualenv, inst
 
 ```bash
 ./install_dependencies.sh --system --venv
-source .venv/bin/activate
 ```
 
-Si `.venv` n'est pas inscriptible, le script utilise automatiquement `.venv-trinitty`.
+Si `.venv` n'est pas inscriptible, le script utilise automatiquement `.venv-trinitty`. L'installateur crée aussi un lanceur `~/.local/bin/trinitty`, afin de lancer Trinitty sans activer le virtualenv à la main.
 
 Options utiles:
 
@@ -52,6 +63,7 @@ Options utiles:
 ./install_dependencies.sh --no-spacy-model
 ./install_dependencies.sh --no-nltk-data
 ./install_dependencies.sh --no-dev-tools
+./install_dependencies.sh --no-launcher
 ./install_dependencies.sh --venv-dir .venv-trinitty
 ```
 
