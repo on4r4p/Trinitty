@@ -132,30 +132,34 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 self.assertTrue((user_root / "keys" / "README.txt").exists())
                 self.assertTrue((user_root / "history").is_dir())
                 self.assertTrue((user_root / "saved_answer" / "saved_error").is_dir())
-                self.assertIn(
-                    "OPENAI_API_KEY_FILE = keys/openai.key",
-                    (user_root / "datas" / "conf.trinity").read_text(),
-                )
+                user_conf = user_root / "datas" / "conf.trinity"
+                user_conf_text = user_conf.read_text()
+                self.assertIn("OPENAI_API_KEY_FILE = keys/openai.key", user_conf_text)
+                packaged_keys = set(trinitty.Config_Keys_From_Text((ROOT / "datas" / "conf.trinity").read_text()))
+                user_keys = set(trinitty.Config_Keys_From_Text(user_conf_text))
+                self.assertLessEqual(packaged_keys, user_keys)
                 self.assertIn(
                     "Configuration fournie avec le package:",
-                    (user_root / "datas" / "conf.trinity").read_text(),
+                    user_conf_text,
                 )
-                self.assertIn(trinitty.Packaged_Config_File(), (user_root / "datas" / "conf.trinity").read_text())
+                self.assertIn(trinitty.Packaged_Config_File(), user_conf_text)
                 self.assertIn("Dossier utilisateur: %s" % user_root, output.getvalue())
                 self.assertIn("Configuration package: %s" % trinitty.Packaged_Config_File(), output.getvalue())
                 self.assertIn(
-                    "Configuration modifiable: %s" % (user_root / "datas" / "conf.trinity"),
+                    "Configuration modifiable: %s" % user_conf,
                     output.getvalue(),
                 )
 
                 openai_key = user_root / "keys" / "openai.key"
-                user_conf = user_root / "datas" / "conf.trinity"
                 openai_key.write_text("sk-existing\n")
                 user_conf.write_text("OPENAI_MODEL = custom-user-model\n")
                 with contextlib.redirect_stdout(io.StringIO()):
                     trinitty.Initialize_User_Data()
                 self.assertEqual("sk-existing\n", openai_key.read_text())
-                self.assertEqual("OPENAI_MODEL = custom-user-model\n", user_conf.read_text())
+                updated_conf = user_conf.read_text()
+                self.assertTrue(updated_conf.startswith("OPENAI_MODEL = custom-user-model\n"))
+                self.assertIn("SPACY_MODEL = fr_core_news_md", updated_conf)
+                self.assertIn("XCB_ERROR_FIX = True", updated_conf)
             finally:
                 if original_home is None:
                     os.environ.pop("HOME", None)
@@ -198,7 +202,10 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 else:
                     os.environ["HOME"] = original_home
 
-            self.assertEqual("OPENAI_MODEL = old-user-model\n", (user_root / "datas" / "conf.trinity").read_text())
+            migrated_conf = (user_root / "datas" / "conf.trinity").read_text()
+            self.assertTrue(migrated_conf.startswith("OPENAI_MODEL = old-user-model\n"))
+            self.assertIn("SPACY_MODEL = fr_core_news_md", migrated_conf)
+            self.assertIn("XCB_ERROR_FIX = True", migrated_conf)
             self.assertEqual("OPENAI_MODEL = old-user-model\n", legacy_conf.read_text())
 
     def test_user_data_path_keeps_legacy_lowercase_directory_compatible(self):
@@ -1784,29 +1791,18 @@ class TrinittyRuntimeTests(unittest.TestCase):
     def test_check_update_warns_without_exit(self):
         reset_command_state()
         original_exit = trinitty.sys.exit
-        original_github = trinitty.Github
         original_g4f = trinitty.g4f
-        original_last_sha = getattr(trinitty, "LAST_SHA", "")
         original_saved_answer = getattr(trinitty, "SAVED_ANSWER", "")
         original_runtime_available = getattr(trinitty, "GPT4FREE_RUNTIME_AVAILABLE", None)
+        original_installed_version = trinitty.Installed_Trinitty_Version
+        original_pypi_version = trinitty.Pypi_Latest_Version
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             trinitty.SAVED_ANSWER = str(root / "saved_answer")
             trinitty.Runtime_Errors = []
-            trinitty.LAST_SHA = "local-old-sha"
 
-            class FakeRepo:
-                def get_commits(self):
-                    return [
-                        SimpleNamespace(sha="remote-new-sha"),
-                        SimpleNamespace(sha="remote-old-sha"),
-                    ]
-
-            class FakeGithub:
-                def get_repo(self, _repo):
-                    return FakeRepo()
-
-            trinitty.Github = FakeGithub
+            trinitty.Installed_Trinitty_Version = lambda: "0.1.0"
+            trinitty.Pypi_Latest_Version = lambda: "0.2.0"
             trinitty.g4f = SimpleNamespace(
                 version=SimpleNamespace(
                     utils=SimpleNamespace(
@@ -1822,14 +1818,19 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 self.assertFalse(trinitty.Check_Update())
             finally:
                 trinitty.sys.exit = original_exit
-                trinitty.Github = original_github
                 trinitty.g4f = original_g4f
-                trinitty.LAST_SHA = original_last_sha
                 trinitty.SAVED_ANSWER = original_saved_answer
                 trinitty.GPT4FREE_RUNTIME_AVAILABLE = original_runtime_available
+                trinitty.Installed_Trinitty_Version = original_installed_version
+                trinitty.Pypi_Latest_Version = original_pypi_version
 
         self.assertEqual("Check_Update", trinitty.Runtime_Errors[-1]["context"])
         self.assertIn("update available", trinitty.Runtime_Errors[-1]["error"])
+
+    def test_version_newer_compares_multi_digit_versions(self):
+        self.assertTrue(trinitty.Version_Newer("0.1.10", "0.1.6"))
+        self.assertFalse(trinitty.Version_Newer("0.1.6", "0.1.10"))
+        self.assertFalse(trinitty.Version_Newer("", "0.1.6"))
 
     def test_bad_confidence_interpretor_accepts_direct_correction(self):
         reset_command_state()
@@ -2521,8 +2522,12 @@ class TrinittyRuntimeTests(unittest.TestCase):
         calls = []
         original_input = getattr(trinitty, "input", None)
         original_trinitty = trinitty.Trinitty
+        original_pyaudio = trinitty.pyaudio
+        original_webrtcvad = trinitty.webrtcvad
         trinitty.input = lambda _prompt="": calls.append("input") or ""
         trinitty.Trinitty = lambda fname="WakeMe": calls.append(fname) or "speech"
+        trinitty.pyaudio = SimpleNamespace()
+        trinitty.webrtcvad = SimpleNamespace()
         try:
             self.assertEqual("speech", trinitty.Push_To_Talk())
         finally:
@@ -2531,8 +2536,75 @@ class TrinittyRuntimeTests(unittest.TestCase):
             else:
                 trinitty.input = original_input
             trinitty.Trinitty = original_trinitty
+            trinitty.pyaudio = original_pyaudio
+            trinitty.webrtcvad = original_webrtcvad
 
         self.assertEqual(["input", "Speech_To_Text"], calls)
+
+    def test_push_to_talk_missing_audio_dependency_does_not_prompt_loop(self):
+        reset_command_state()
+        reset_runtime_queues()
+        calls = []
+        original_pyaudio = trinitty.pyaudio
+        original_webrtcvad = trinitty.webrtcvad
+        original_input = getattr(trinitty, "input", None)
+        original_trinitty = trinitty.Trinitty
+        original_sleep = trinitty.Go_Back_To_Sleep
+        trinitty.pyaudio = trinitty.MissingDependency("pyaudio")
+        trinitty.webrtcvad = SimpleNamespace()
+        trinitty.input = lambda _prompt="": (_ for _ in ()).throw(AssertionError("input should not be called"))
+        trinitty.Trinitty = lambda _fname="WakeMe": (_ for _ in ()).throw(AssertionError("Trinitty should not recurse"))
+        trinitty.Go_Back_To_Sleep = lambda go_trinitty=True: calls.append(("sleep", go_trinitty)) or "sleep"
+        try:
+            self.assertEqual("sleep", trinitty.Push_To_Talk())
+        finally:
+            trinitty.pyaudio = original_pyaudio
+            trinitty.webrtcvad = original_webrtcvad
+            if original_input is None:
+                delattr(trinitty, "input")
+            else:
+                trinitty.input = original_input
+            trinitty.Trinitty = original_trinitty
+            trinitty.Go_Back_To_Sleep = original_sleep
+
+        self.assertEqual([("sleep", False)], calls)
+
+    def test_start_thread_record_missing_audio_dependency_does_not_start_threads(self):
+        reset_command_state()
+        reset_runtime_queues()
+        original_pyaudio = trinitty.pyaudio
+        original_webrtcvad = trinitty.webrtcvad
+        original_thread = trinitty.Thread
+        trinitty.pyaudio = trinitty.MissingDependency("pyaudio")
+        trinitty.webrtcvad = SimpleNamespace()
+        trinitty.Thread = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("thread should not start"))
+        try:
+            self.assertFalse(trinitty.Start_Thread_Record())
+        finally:
+            trinitty.pyaudio = original_pyaudio
+            trinitty.webrtcvad = original_webrtcvad
+            trinitty.Thread = original_thread
+
+        self.assertTrue(trinitty.record_on.empty())
+        self.assertFalse(trinitty.cancel_operation.empty())
+        self.assertFalse(trinitty.No_Input.empty())
+
+    def test_trinitty_speech_to_text_does_not_reenter_wakeme_when_recording_cannot_start(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+        calls = []
+        original_start = trinitty.Start_Thread_Record
+        original_sleep = trinitty.Go_Back_To_Sleep
+        trinitty.Start_Thread_Record = lambda: False
+        trinitty.Go_Back_To_Sleep = lambda go_trinitty=True: calls.append(("sleep", go_trinitty)) or "sleep"
+        try:
+            self.assertEqual("sleep", trinitty.Trinitty("Speech_To_Text"))
+        finally:
+            trinitty.Start_Thread_Record = original_start
+            trinitty.Go_Back_To_Sleep = original_sleep
+
+        self.assertEqual([("sleep", False)], calls)
 
     def test_trinitty_routes_wakeme_to_push_to_talk_when_enabled(self):
         reset_command_state()
@@ -2547,6 +2619,56 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Push_To_Talk = original_push_to_talk
 
         self.assertEqual(["push"], calls)
+
+    def test_push_to_talk_wakeme_records_and_sends_transcript(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+        trinitty.PUSH_TO_TALK = True
+        calls = []
+        original_input = getattr(trinitty, "input", None)
+        original_pyaudio = trinitty.pyaudio
+        original_webrtcvad = trinitty.webrtcvad
+        original_start = trinitty.Start_Thread_Record
+        original_speech = trinitty.Speech_To_Text
+        original_check = trinitty.Check_Transcript
+        original_commandes = trinitty.Commandes
+        original_to_gpt = trinitty.To_Gpt
+        trinitty.input = lambda _prompt="": calls.append("input") or ""
+        trinitty.pyaudio = SimpleNamespace()
+        trinitty.webrtcvad = SimpleNamespace()
+        trinitty.Start_Thread_Record = lambda: calls.append("start_record") or True
+        trinitty.Speech_To_Text = lambda audio: calls.append(("speech", audio)) or ("t", "c", "w", "wc", "")
+        trinitty.Check_Transcript = lambda *_args: calls.append("check") or ("bonjour", True)
+        trinitty.Commandes = lambda text: calls.append(("cmd", text)) or False
+        trinitty.To_Gpt = lambda text: calls.append(("gpt", text)) or "sent"
+        trinitty.audio_datas.put("audio-bytes")
+        try:
+            self.assertIsNone(trinitty.Trinitty("WakeMe"))
+        finally:
+            if original_input is None:
+                delattr(trinitty, "input")
+            else:
+                trinitty.input = original_input
+            trinitty.pyaudio = original_pyaudio
+            trinitty.webrtcvad = original_webrtcvad
+            trinitty.Start_Thread_Record = original_start
+            trinitty.Speech_To_Text = original_speech
+            trinitty.Check_Transcript = original_check
+            trinitty.Commandes = original_commandes
+            trinitty.To_Gpt = original_to_gpt
+
+        self.assertEqual(
+            [
+                "input",
+                "start_record",
+                ("speech", "audio-bytes"),
+                "check",
+                ("cmd", "bonjour"),
+                ("gpt", "bonjour"),
+            ],
+            calls,
+        )
 
     def test_wake_up_failure_switches_to_push_to_talk(self):
         reset_command_state()

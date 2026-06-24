@@ -3,7 +3,9 @@
 import csv
 import html
 import importlib
+from importlib import metadata as importlib_metadata
 import inspect
+import json
 import os
 import random
 import re
@@ -17,6 +19,7 @@ import subprocess
 import sys
 import time
 from urllib.parse import quote_plus
+from urllib.request import urlopen
 
 from difflib import SequenceMatcher
 
@@ -78,6 +81,8 @@ APLAY_BIN = which("aplay") or "aplay"
 PLAY_BIN = which("play") or "play"
 USER_DATA_DIR_NAME = "Trinitty"
 LEGACY_USER_DATA_DIR_NAME = "trinitty"
+PYPI_PACKAGE_NAME = "trinitty"
+PYPROJECT_VERSION_RE = re.compile(r'^\s*version\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 
 
 def User_Data_Base_Path():
@@ -142,6 +147,15 @@ def Packaged_Config_File():
     return os.path.join(globals().get("SCRIPT_PATH", Default_Script_Path()), "datas", "conf.trinity")
 
 
+def Packaged_Config_Text():
+    try:
+        with open(Packaged_Config_File()) as f:
+            return f.read()
+    except OSError as e:
+        Log_Error("Packaged_Config_Text", e)
+        return ""
+
+
 def Default_User_Launcher_Path():
     return os.path.join(os.path.expanduser("~"), ".local", "bin", "trinitty")
 
@@ -192,6 +206,46 @@ def Write_File_If_Missing(filepath, content, mode=None):
     return True
 
 
+def Config_Keys_From_Text(text):
+    keys = []
+    for line in str(text or "").splitlines():
+        key, _value = Config_Option_Value(line)
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def Append_Missing_User_Config_Options(user_conf):
+    if not os.path.exists(user_conf):
+        return False
+
+    packaged_text = Packaged_Config_Text()
+    if not packaged_text:
+        return False
+
+    with open(user_conf) as f:
+        user_text = f.read()
+
+    existing_keys = set(Config_Keys_From_Text(user_text))
+    missing_lines = []
+    for line in packaged_text.splitlines():
+        key, _value = Config_Option_Value(line)
+        if key and key not in existing_keys:
+            missing_lines.append(line)
+            existing_keys.add(key)
+
+    if not missing_lines:
+        return False
+
+    with open(user_conf, "a") as f:
+        if user_text and not user_text.endswith("\n"):
+            f.write("\n")
+        f.write("\n# Variables ajoutees depuis la configuration package sans remplacer les valeurs existantes.\n")
+        for line in missing_lines:
+            f.write(line + "\n")
+    return True
+
+
 def Initialize_User_Data():
     root = User_Data_Root()
     created = []
@@ -216,6 +270,8 @@ def Initialize_User_Data():
         created.append(user_conf)
     elif Write_File_If_Missing(user_conf, User_Config_Template()):
         created.append(user_conf)
+    if Append_Missing_User_Config_Options(user_conf):
+        created.append(user_conf)
 
     openai_key = os.path.join(root, "keys", "openai.key")
     if Write_File_If_Missing(openai_key, "# Collez la cle OpenAI ici, sans guillemets.\n", mode=0o600):
@@ -234,6 +290,9 @@ def Initialize_User_Data():
 
 
 def User_Config_Template():
+    packaged_config = Packaged_Config_Text().rstrip()
+    if not packaged_config:
+        packaged_config = "SAVED_ANSWER = default\nOPENAI_ENABLED = True\nOPENAI_API_KEY_FILE = keys/openai.key"
     return """# Overrides locaux de Trinitty.
 # Ce fichier est lu apres la configuration fournie avec le package.
 # Configuration fournie avec le package:
@@ -241,21 +300,8 @@ def User_Config_Template():
 # Les valeurs ci-dessous remplacent celles du fichier ci-dessus.
 # Les fichiers existants ne sont pas ecrases par Trinitty.
 
-SAVED_ANSWER = default
-OPENAI_ENABLED = True
-OPENAI_API_KEY_FILE = keys/openai.key
-OPENAI_MODEL = gpt-5.5
-OPENAI_TIMEOUT = 30
-OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
-
-# Mettre a True pour eviter le wake word et lancer l'ecoute avec Entree.
-PUSH_TO_TALK = False
-
-# OpenAI reste prioritaire. gpt4free sert de secours si OpenAI echoue.
-GPT4FREE_SERVERS_LIST = None
-GPT4FREE_SERVERS_STATUS = Active
-GPT4FREE_SERVERS_AUTH = False
-""" % Packaged_Config_File()
+%s
+""" % (Packaged_Config_File(), packaged_config)
 
 
 def User_Keys_Readme_Template():
@@ -627,6 +673,26 @@ def Queue_Drain(queue_obj):
         except Empty:
             break
     return drained
+
+
+def Audio_Input_Available():
+    missing = []
+    if not Dependency_Available(pyaudio):
+        missing.append("pyaudio")
+    if not Dependency_Available(webrtcvad):
+        missing.append("webrtcvad-wheels")
+
+    if not missing:
+        return True
+
+    message = "Entrée audio indisponible. Dépendances manquantes: %s" % ", ".join(missing)
+    print("\n-Trinitty:Error:%s" % message)
+    print(
+        "-Trinitty:Sur Raspberry, installer python3-pyaudio puis recréer le venv avec "
+        "`python3 -m venv --system-site-packages ~/venvs/trinitty`."
+    )
+    Log_Error("Audio_Input_Available", message)
+    return False
 
 
 def Stop_Recording():
@@ -2676,9 +2742,9 @@ def Load_Csv():
             for raw_line in data:
                 tmplst = []
                 parts = raw_line.strip().split(",")
-                for l in parts:
-                    if l != "":
-                        tmplst.append(l)
+                for part in parts:
+                    if part != "":
+                        tmplst.append(part)
                 Loaded_Synonyms_Words_List.append(tmplst)
 
     else:
@@ -4977,11 +5043,10 @@ def Wikipedia(to_search, Title=None, FULL=None):
 
                     Play_Audio_File(SCRIPT_PATH + "/local_sounds/question/wikipedia.wav")
 
-                    Start_Thread_Record()
                     txt = ""
                     opinion = None
 
-                    if Wait_for("audio"):
+                    if Start_Thread_Record() is not False and Wait_for("audio"):
                         audio = Queue_Get_Optional(audio_datas, timeout=0.2, default=None)
                         if audio is not None:
                             (
@@ -5388,9 +5453,7 @@ def Bad_Confidence(txt):
     question_sound = SCRIPT_PATH + "/local_sounds/question/1.wav"
     Play_Audio_File(question_sound)
 
-    Start_Thread_Record()
-
-    if Wait_for("audio"):
+    if Start_Thread_Record() is not False and Wait_for("audio"):
         audio = Queue_Get_Optional(audio_datas, timeout=0.2, default=None)
         if audio is None:
             score_sentiment.put(False)
@@ -5790,7 +5853,8 @@ def Playback_Interrupt_Listener(stop_event, timeout=None):
         timeout = globals().get("PLAYBACK_INTERRUPT_TIMEOUT", 30.0)
 
     try:
-        Start_Thread_Record()
+        if Start_Thread_Record() is False:
+            return False
         deadline = time.monotonic() + float(timeout)
         audio = None
         while not stop_event.is_set() and time.monotonic() < deadline:
@@ -5912,12 +5976,18 @@ def dbg_queue():
 
 def Start_Thread_Record():
     PRINT("\n-Trinitty:start thread rec")
+    if not Audio_Input_Available():
+        cancel_operation.put(True)
+        No_Input.put(True)
+        return False
+
     record_on.put(True)
 
     RQ = Thread(target=Record_Query, daemon=True)
     RQ.start()
     CS = Thread(target=Check_Silence, daemon=True)
     CS.start()
+    return True
 
 
 def Go_Back_To_Sleep(go_trinitty=True):
@@ -6111,6 +6181,8 @@ def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=N
 
 
 def Push_To_Talk():
+    if not Audio_Input_Available():
+        return Go_Back_To_Sleep(False)
     input("\n-Trinitty:Appuyez sur Entree pour parler.")
     return Trinitty("Speech_To_Text")
 
@@ -6893,7 +6965,8 @@ def Results_Hub(original_result,topx_res=None,from_function=None):
             Play_Audio_File(SCRIPT_PATH + "/local_sounds/question/search_history_cmd.wav")
 
 #        if not INTERPRETOR:
-        Start_Thread_Record()
+        if Start_Thread_Record() is False:
+            return Go_Back_To_Sleep(go_trinitty=False)
 
         if Wait_for("audio"):
             audio = Queue_Get_Optional(audio_datas, timeout=0.2, default=None)
@@ -7362,9 +7435,7 @@ def Check_History(question):
         Play_Audio_File(final_wav)
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/question/amigood.wav")
 
-        Start_Thread_Record()
-
-        if Wait_for("audio"):
+        if Start_Thread_Record() is not False and Wait_for("audio"):
             audio = Queue_Get_Optional(audio_datas, timeout=0.2, default=None)
             if audio is None:
                 score_sentiment.put(False)
@@ -7444,7 +7515,8 @@ def Trinitty(fname="WakeMe"):
     else:
 
         if fname == "Speech_To_Text":
-            Start_Thread_Record()
+            if Start_Thread_Record() is False:
+                return Go_Back_To_Sleep(False)
             if Wait_for("audio"):
                 audio = Queue_Get_Optional(audio_datas, timeout=0.2, default=None)
                 if audio is None:
@@ -7480,7 +7552,8 @@ def Trinitty(fname="WakeMe"):
 
         elif fname == "Repeat":
 
-            Start_Thread_Record()
+            if Start_Thread_Record() is False:
+                return Go_Back_To_Sleep(False)
             if Wait_for("audio"):
                 audio = Queue_Get_Optional(audio_datas, timeout=0.2, default=None)
                 if audio is None:
@@ -7860,10 +7933,52 @@ def Xcb_Fix(mode):
                 Log_Error("Xcb_Fix:set", e)
 
 
+def Version_Key(version):
+    parts = re.findall(r"\d+|[A-Za-z]+", str(version or ""))
+    key = []
+    for part in parts:
+        if part.isdigit():
+            key.append((1, int(part)))
+        else:
+            key.append((0, part.lower()))
+    return key
+
+
+def Version_Newer(latest_version, current_version):
+    latest_key = Version_Key(latest_version)
+    current_key = Version_Key(current_version)
+    if not latest_key or not current_key:
+        return False
+    return latest_key > current_key
+
+
+def Project_Version_From_Pyproject():
+    pyproject_path = os.path.join(Default_Script_Path(), "pyproject.toml")
+    try:
+        with open(pyproject_path) as f:
+            text = f.read()
+    except OSError:
+        return ""
+    match = PYPROJECT_VERSION_RE.search(text)
+    return match.group(1).strip() if match else ""
+
+
+def Installed_Trinitty_Version():
+    try:
+        return importlib_metadata.version(PYPI_PACKAGE_NAME)
+    except importlib_metadata.PackageNotFoundError:
+        return Project_Version_From_Pyproject()
+
+
+def Pypi_Latest_Version(package_name=PYPI_PACKAGE_NAME, timeout=5):
+    url = "https://pypi.org/pypi/%s/json" % package_name
+    with urlopen(url, timeout=timeout) as response:  # noqa: S310 - fixed PyPI JSON endpoint for update checks.
+        payload = json.loads(response.read().decode("utf-8"))
+    return str(payload.get("info", {}).get("version", "")).strip()
+
+
 def Check_Update():
     PRINT("\n-Trinitty:Dans Check_Update().")
-
-    gitobj = Github()
 
     to_update = []
     Gpt4free_Is_Up = False
@@ -7887,18 +8002,18 @@ def Check_Update():
         Gpt4free_Is_Up = True
 
     Trinitty_Is_Up = False
-    next_trinitty = ""
+    Trinitty_current_version = ""
+    Trinitty_latest_version = ""
     try:
-        repo_trinitty = gitobj.get_repo("on4r4p/trinitty")
-        commits_trinitty = repo_trinitty.get_commits()
-        last_trinitty = commits_trinitty[1].sha
-        next_trinitty = commits_trinitty[0].sha
-
-        if last_trinitty == LAST_SHA:
+        Trinitty_current_version = Installed_Trinitty_Version()
+        Trinitty_latest_version = Pypi_Latest_Version()
+        if Trinitty_current_version and Trinitty_latest_version:
+            Trinitty_Is_Up = not Version_Newer(Trinitty_latest_version, Trinitty_current_version)
+        else:
             Trinitty_Is_Up = True
 
     except Exception as e:
-        print("\n-Trinitty:Error:Check_Update n'a pas pu déterminer la version de Trinitty:%s" % str(e))
+        print("\n-Trinitty:Error:Check_Update n'a pas pu déterminer la version PyPI de Trinitty:%s" % str(e))
         Trinitty_Is_Up = True
 
     PRINT("\n-Trinitty:Vérification de mise à jour pour Gpt4free:\n")
@@ -7914,12 +8029,18 @@ def Check_Update():
         print("\n-Trinitty:La version de gpt4free est à jour .")
 
     PRINT("\n-Trinitty:Vérification de mise à jour pour Trinitty:")
+    if Trinitty_current_version or Trinitty_latest_version:
+        PRINT(
+            "\n-Trinitty:Version installée:%s / Version PyPI:%s\n"
+            % (Trinitty_current_version or "inconnue", Trinitty_latest_version or "inconnue")
+        )
     if not Trinitty_Is_Up:
         to_update.append("Trinitty")
-        PRINT("\n-Trinitty:Github SHA doesn't matched:\n%s=!%s\n" % (LAST_SHA, last_trinitty))
+        PRINT(
+            "\n-Trinitty:Version PyPI plus récente détectée:%s>%s\n"
+            % (Trinitty_latest_version, Trinitty_current_version)
+        )
     else:
-        #       PRINT("\n-Trinitty:Github SHA matched:\n%s==%s\n"%(LAST_SHA,last_trinitty))
-        PRINT("\n-Trinitty:next_sha:%s\n" % (next_trinitty))
         print("\n-Trinitty:La version de Trinitty est à jour .")
 
     if len(to_update) > 0:

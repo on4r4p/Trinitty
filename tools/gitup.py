@@ -1,22 +1,20 @@
-#!/usr/bin/python3
-from github import Github
+#!/usr/bin/env python3
+import importlib.util
+from pathlib import Path
 
 
-def main():
-    gitobj = Github()
-    repo_trinitty = gitobj.get_repo("on4r4p/trinitty")
-    commit = repo_trinitty.get_commits()
+ROOT_GITUP = Path(__file__).resolve().parents[1] / "gitup.py"
 
-    for c in commit:
-        print(c)
 
-    print()
-    last_trinitty = commit[1].sha
-    next_trinitty = commit[0].sha
+def load_root_gitup():
+    spec = importlib.util.spec_from_file_location("trinitty_root_gitup", ROOT_GITUP)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-    print("last_trinitty:", last_trinitty)
-    print("next_trinitty:", next_trinitty)
-    return 0
+
+def main(argv=None):
+    return load_root_gitup().main(argv)
 
 
 if __name__ == "__main__":
