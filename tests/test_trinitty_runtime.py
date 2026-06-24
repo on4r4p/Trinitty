@@ -576,6 +576,21 @@ class TrinittyRuntimeTests(unittest.TestCase):
             if original_translate is not missing:
                 trinitty.GOOGLE_TRANSLATE = original_translate
 
+    def test_parse_response_removes_greater_than_symbol_for_tts(self):
+        reset_command_state()
+        original_dlang = getattr(trinitty, "DLANG_KEY", False)
+        original_translate = getattr(trinitty, "GOOGLE_TRANSLATE", False)
+        trinitty.DLANG_KEY = False
+        trinitty.GOOGLE_TRANSLATE = False
+        try:
+            self.assertEqual(
+                "La valeur 10 doit etre ignoree",
+                trinitty.parse_response("La valeur > 10 doit etre ignoree"),
+            )
+        finally:
+            trinitty.DLANG_KEY = original_dlang
+            trinitty.GOOGLE_TRANSLATE = original_translate
+
     def test_config_option_value_preserves_hash_inside_quotes(self):
         self.assertEqual(
             ("OPENAI_INSTRUCTIONS", "Garde le # comme texte"),

@@ -1052,6 +1052,7 @@ def parse_response(data):
     input_lang = None
 
     data = html.unescape(data)
+    data = re.sub(r"\s*>\s*", " ", data)
     dlang_key = globals().get("DLANG_KEY", "")
     google_translate = globals().get("GOOGLE_TRANSLATE", False)
 
