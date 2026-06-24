@@ -25,7 +25,7 @@ def reset_command_state():
     trinitty.CMD_DBG = False
     trinitty.INTERPRETOR = True
     trinitty.PUSH_TO_TALK = False
-    trinitty.PLAYBACK_INTERRUPT_ENABLED = True
+    trinitty.PLAYBACK_INTERRUPT_ENABLED = False
     trinitty.PLAYBACK_INTERRUPT_TIMEOUT = 30.0
     trinitty.COMMAND_CLASSIFIER_ENABLED = False
     trinitty.COMMAND_CLASSIFIER_THRESHOLD = 0.65
@@ -33,6 +33,7 @@ def reset_command_state():
     trinitty.COMMAND_CLASSIFIER_MODEL = None
     trinitty.GOOGLE_STT_TIMEOUT = 20.0
     trinitty.GOOGLE_LANGUAGE_TIMEOUT = 8.0
+    trinitty.HISTORY_CLASSIFICATION_ENABLED = True
     trinitty.GPT4FREE_COOKIES_AUTO_SYNC = True
     trinitty.GPT4FREE_COOKIES_SYNC_DIR = "tools/har_and_cookies"
     trinitty.GPT4FREE_COOKIES_LOADED = False
@@ -196,6 +197,35 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertIn("export PYTHONNOUSERSITE=1", content)
             self.assertIn("unset PYTHONPATH", content)
             self.assertIn("'%s' -m trinitty" % python_bin, content)
+
+    def test_migrate_user_config_disables_generated_playback_interrupt_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            user_conf = Path(tmp) / "conf.trinity"
+            user_conf.write_text(
+                "\n".join(
+                    [
+                        "DEBUG = True",
+                        "PLAYBACK_INTERRUPT_ENABLED = True #True or False - listen for stop command while speaking",
+                        "OPENAI_TIMEOUT = 30",
+                    ]
+                )
+                + "\n"
+            )
+
+            self.assertTrue(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
+            migrated = user_conf.read_text()
+
+        self.assertIn("PLAYBACK_INTERRUPT_ENABLED = False", migrated)
+        self.assertIn("DEBUG = True", migrated)
+        self.assertIn("OPENAI_TIMEOUT = 30", migrated)
+
+    def test_migrate_user_config_keeps_custom_playback_interrupt_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            user_conf = Path(tmp) / "conf.trinity"
+            user_conf.write_text("PLAYBACK_INTERRUPT_ENABLED = True # custom local choice\n")
+
+            self.assertFalse(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
+            self.assertEqual("PLAYBACK_INTERRUPT_ENABLED = True # custom local choice\n", user_conf.read_text())
 
     def test_initialize_user_data_migrates_legacy_user_local_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -829,6 +859,46 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertEqual(["show-history"], calls)
 
+    def test_load_csv_routes_common_spoken_show_history_requests(self):
+        reset_command_state()
+        original_paths = {
+            "SCRIPT_PATH": getattr(trinitty, "SCRIPT_PATH", ""),
+            "SAVED_ANSWER": getattr(trinitty, "SAVED_ANSWER", ""),
+            "CMDFILE": getattr(trinitty, "CMDFILE", ""),
+            "ALTFILE": getattr(trinitty, "ALTFILE", ""),
+            "TRIFILE": getattr(trinitty, "TRIFILE", ""),
+            "ACTFILE": getattr(trinitty, "ACTFILE", ""),
+            "PREFILE": getattr(trinitty, "PREFILE", ""),
+            "SYNFILE": getattr(trinitty, "SYNFILE", ""),
+        }
+        original_show_history = trinitty.Show_History
+        calls = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            datas = ROOT / "datas"
+            trinitty.SCRIPT_PATH = str(ROOT)
+            trinitty.SAVED_ANSWER = str(Path(tmp) / "saved_answer")
+            trinitty.CMDFILE = str(datas / "cmd.trinity")
+            trinitty.ALTFILE = str(datas / "alt_cmd.trinity")
+            trinitty.TRIFILE = str(datas / "alt_trigger.trinity")
+            trinitty.ACTFILE = str(datas / "action.trinity")
+            trinitty.PREFILE = str(datas / "prefix.trinity")
+            trinitty.SYNFILE = str(datas / "synonym.trinity")
+            trinitty.Show_History = lambda: calls.append("show-history") or True
+
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertTrue(trinitty.Load_Csv())
+                    self.assertTrue(trinitty.Commandes("est-ce que tu peux afficher l'historique"))
+                    self.assertTrue(trinitty.Commandes("tu peux afficher l historique"))
+                    self.assertTrue(trinitty.Commandes("montre moi l historique"))
+            finally:
+                trinitty.Show_History = original_show_history
+                for name, value in original_paths.items():
+                    setattr(trinitty, name, value)
+
+        self.assertEqual(["show-history", "show-history", "show-history"], calls)
+
     def test_command_classifier_training_samples_collects_commands_and_negatives(self):
         reset_command_state()
         trinitty.Loaded_Actions_Words_Requests = ["affiche"]
@@ -1259,6 +1329,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         reset_command_state()
         reset_runtime_queues()
         trinitty.INTERPRETOR = False
+        trinitty.PLAYBACK_INTERRUPT_ENABLED = True
         trinitty.Loaded_Actions_Words_Requests = ["arrete"]
         trinitty.Loaded_Wait_Words_Requests = ["arrete"]
         trinitty.audio_datas.put(b"audio")
@@ -1278,6 +1349,14 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertFalse(trinitty.cancel_operation.empty())
         self.assertEqual(["start", "stop"], calls)
+
+    def test_playback_interrupt_listener_is_disabled_by_default(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+
+        self.assertFalse(trinitty.Playback_Interrupt_Listener(trinitty.Event(), timeout=0.01))
+        self.assertIsNone(trinitty.Start_Playback_Interrupt_Listener())
 
     def test_play_response_starts_interrupt_listener_around_playback(self):
         reset_command_state()
@@ -1899,7 +1978,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         original_wait_audio = trinitty.Play_Wait_Response_Audio
         original_play = trinitty.Play_Audio_File
         original_sleep = trinitty.Go_Back_To_Sleep
-        trinitty.Check_History = lambda _text: False
+        trinitty.Check_History = lambda _text, **_kwargs: False
         trinitty.Openai_Gpt = lambda _text: ""
         trinitty.Play_Wait_Response_Audio = lambda: calls.append(("wait", None)) or 0
         trinitty.Play_Audio_File = lambda path: calls.append(("play", path)) or 0
@@ -1921,6 +2000,98 @@ class TrinittyRuntimeTests(unittest.TestCase):
             ],
             calls,
         )
+
+    def test_to_gpt_starts_wait_audio_before_history_and_openai(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.GPT4FREE_SERVERS_STATUS = False
+        calls = []
+        originals = (
+            trinitty.Start_Wait_Response_Audio,
+            trinitty.Stop_Wait_Response_Audio,
+            trinitty.Check_History,
+            trinitty.Openai_Gpt,
+            trinitty.Text_To_Speech,
+        )
+        trinitty.Start_Wait_Response_Audio = lambda: calls.append("wait-start") or "wait-handle"
+        trinitty.Stop_Wait_Response_Audio = lambda handle: calls.append(("wait-stop", handle))
+        trinitty.Check_History = lambda _text, **_kwargs: calls.append("history") or False
+        trinitty.Openai_Gpt = lambda _text: calls.append("openai") or "reponse"
+        trinitty.Text_To_Speech = lambda text, stayawake=False: calls.append(("tts", text, stayawake)) or "tts"
+        try:
+            self.assertEqual("tts", trinitty.To_Gpt("question"))
+        finally:
+            (
+                trinitty.Start_Wait_Response_Audio,
+                trinitty.Stop_Wait_Response_Audio,
+                trinitty.Check_History,
+                trinitty.Openai_Gpt,
+                trinitty.Text_To_Speech,
+            ) = originals
+
+        self.assertEqual(
+            ["wait-start", "history", "openai", ("wait-stop", "wait-handle"), ("tts", "reponse", False)],
+            calls,
+        )
+
+    def test_to_gpt_keeps_history_mandatory_while_classification_runs_in_worker(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.SCRIPT_PATH = str(ROOT)
+        trinitty.GPT4FREE_SERVERS_STATUS = False
+        trinitty.Current_Category = []
+        trinitty.Loaded_History_List = [
+            {
+                "hist_file": "oldcat",
+                "hist_cats": "oldcat",
+                "hist_input_full": "ancienne question",
+                "hist_input_short": "ancienne question",
+                "hist_output": "ancienne reponse",
+                "hist_output_wav": "old.wav",
+            }
+        ]
+        calls = []
+        originals = (
+            trinitty.Start_Wait_Response_Audio,
+            trinitty.Stop_Wait_Response_Audio,
+            trinitty.Classify,
+            trinitty.preprocess,
+            trinitty.similar,
+            trinitty.Openai_Gpt,
+            trinitty.Text_To_Speech,
+        )
+
+        def slow_classify(text):
+            calls.append(("classify-worker", text))
+            time.sleep(5.2)
+
+        trinitty.Start_Wait_Response_Audio = lambda: calls.append("wait-start") or "wait-handle"
+        trinitty.Stop_Wait_Response_Audio = lambda handle: calls.append(("wait-stop", handle))
+        trinitty.Classify = slow_classify
+        trinitty.preprocess = lambda value: value
+        trinitty.similar = lambda left, right: calls.append(("history-scan", left, right)) or 0.0
+        trinitty.Openai_Gpt = lambda text: calls.append(("openai", text)) or "reponse rapide"
+        trinitty.Text_To_Speech = lambda text, stayawake=False: calls.append(("tts", text, stayawake)) or "tts"
+
+        try:
+            started = time.monotonic()
+            self.assertEqual("tts", trinitty.To_Gpt("question actuelle"))
+            elapsed = time.monotonic() - started
+        finally:
+            (
+                trinitty.Start_Wait_Response_Audio,
+                trinitty.Stop_Wait_Response_Audio,
+                trinitty.Classify,
+                trinitty.preprocess,
+                trinitty.similar,
+                trinitty.Openai_Gpt,
+                trinitty.Text_To_Speech,
+            ) = originals
+
+        self.assertLess(elapsed, 1.0)
+        self.assertIn(("history-scan", "question actuelle", "ancienne question"), calls)
+        self.assertIn(("classify-worker", "question actuelle"), calls)
+        self.assertIn(("openai", "question actuelle"), calls)
 
     def test_play_wait_response_audio_uses_packaged_wait_sound(self):
         reset_command_state()
@@ -1954,7 +2125,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         original_getconf = trinitty.GetConf
         original_check_servers = trinitty.Check_Free_Servers
         original_freegpt = trinitty.FreeGpt
-        trinitty.Check_History = lambda _text: False
+        trinitty.Check_History = lambda _text, **_kwargs: False
         trinitty.Openai_Gpt = lambda _text: ""
         trinitty.Play_Wait_Response_Audio = lambda: calls.append("wait") or 0
         trinitty.Refresh_Gpt4free_Providers_Config = lambda: calls.append("refresh") or False
@@ -1972,20 +2143,14 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Check_Free_Servers = original_check_servers
             trinitty.FreeGpt = original_freegpt
 
+        self.assertEqual(["wait", "refresh", "getconf", "check_servers"], calls[:4])
+        self.assertEqual("freegpt", calls[4][0])
+        self.assertEqual("question", calls[4][1])
         self.assertEqual(
-            [
-                "wait",
-                "refresh",
-                "getconf",
-                "check_servers",
-                (
-                    "freegpt",
-                    "question",
-                    {"check_history": False, "save_last_sentence": False, "play_wait": False},
-                ),
-            ],
-            calls,
+            {"check_history": False, "save_last_sentence": False, "play_wait": False},
+            {key: calls[4][2][key] for key in ["check_history", "save_last_sentence", "play_wait"]},
         )
+        self.assertIn("wait_audio", calls[4][2])
         self.assertEqual(["g4f.Provider.Qwen"], trinitty.Providers_To_Use)
 
     def test_load_csv_missing_required_file_returns_false_without_exit(self):
@@ -2476,13 +2641,14 @@ class TrinittyRuntimeTests(unittest.TestCase):
                         'OPENAI_INSTRUCTIONS = "Keep # as plain text" # inline comment',
                         "SPACY_MODEL = fr_core_news_md",
                         "GOOGLE_LANGUAGE_TIMEOUT = 13",
+                        "HISTORY_CLASSIFICATION_ENABLED = True",
                         "GPT4FREE_SERVERS_LIST = None",
                         "GPT4FREE_SERVERS_STATUS = None",
                     ]
                 )
             )
             (datas / "conf.local.trinity").write_text(
-                "SAVED_ANSWER = %s\nOPENAI_TIMEOUT = 7\nGOOGLE_STT_TIMEOUT = 11\nGOOGLE_LANGUAGE_TIMEOUT = 5\n"
+                "SAVED_ANSWER = %s\nOPENAI_TIMEOUT = 7\nGOOGLE_STT_TIMEOUT = 11\nGOOGLE_LANGUAGE_TIMEOUT = 5\nHISTORY_CLASSIFICATION_ENABLED = False\n"
                 % local_saved
             )
 
@@ -2496,6 +2662,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertEqual(7.0, trinitty.OPENAI_TIMEOUT)
             self.assertEqual(11.0, trinitty.GOOGLE_STT_TIMEOUT)
             self.assertEqual(5.0, trinitty.GOOGLE_LANGUAGE_TIMEOUT)
+            self.assertFalse(trinitty.HISTORY_CLASSIFICATION_ENABLED)
             self.assertEqual("Keep # as plain text", trinitty.OPENAI_INSTRUCTIONS)
             self.assertTrue((local_saved / "saved_error").exists())
 
@@ -2515,12 +2682,13 @@ class TrinittyRuntimeTests(unittest.TestCase):
                         "OPENAI_TIMEOUT = 30",
                         "GOOGLE_STT_TIMEOUT = 20",
                         "GOOGLE_LANGUAGE_TIMEOUT = 13",
+                        "HISTORY_CLASSIFICATION_ENABLED = True",
                         "GPT4FREE_SERVERS_STATUS = Active",
                     ]
                 )
             )
             (user_datas / "conf.trinity").write_text(
-                "OPENAI_MODEL = user-model\nOPENAI_TIMEOUT = 4\nGOOGLE_STT_TIMEOUT = 8\nGOOGLE_LANGUAGE_TIMEOUT = 6\nGPT4FREE_SERVERS_STATUS = None\n"
+                "OPENAI_MODEL = user-model\nOPENAI_TIMEOUT = 4\nGOOGLE_STT_TIMEOUT = 8\nGOOGLE_LANGUAGE_TIMEOUT = 6\nHISTORY_CLASSIFICATION_ENABLED = False\nGPT4FREE_SERVERS_STATUS = None\n"
             )
             original_home = os.environ.get("HOME")
             missing = object()
@@ -2545,6 +2713,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertEqual(4.0, trinitty.OPENAI_TIMEOUT)
             self.assertEqual(8.0, trinitty.GOOGLE_STT_TIMEOUT)
             self.assertEqual(6.0, trinitty.GOOGLE_LANGUAGE_TIMEOUT)
+            self.assertFalse(trinitty.HISTORY_CLASSIFICATION_ENABLED)
             self.assertIsNone(trinitty.GPT4FREE_SERVERS_STATUS)
 
     def test_getconf_accepts_quoted_gpt4free_provider_list(self):

@@ -99,6 +99,20 @@ F_repeat,qu'*que t*a* dis
 F_repeat,vous avez dit quoi
 F_repeat,qu'*que vous* dis
 F_show_history,affiche l'historique
+F_show_history,affiche*historique
+F_show_history,afficher*historique
+F_show_history,montre*historique
+F_show_history,montrer*historique
+F_show_history,ouvre*historique
+F_show_history,ouvrir*historique
+F_show_history,liste*historique
+F_show_history,lister*historique
+F_show_history,consulte*historique
+F_show_history,consulter*historique
+F_show_history,est*ce*que*tu*peux*afficher*historique
+F_show_history,estce*tu*peux*afficher*historique
+F_show_history,peux*tu*afficher*historique
+F_show_history,tu*peux*afficher*historique
 F_search_history,[rappelle{s-tu/ toi/}/souviens{-tu/ toi/}/sais{-tu/}]*[deja {parle/discute}]*[avec toi/avec vous/ensemble/][ historique/] 
 F_search_history,[pag{e /es }/inf{o /os }/resultat{s /}]*[parl{e /ent /ant /eraient }/concern{e /ent /eraient }/en rapport ]*[ historique/]
 F_search_history,[cherche{r/z/-moi}/trouve{r/z/-moi}/regarde{r/z/-moi}/verifie{r/z/-moi}] * dans l'historique

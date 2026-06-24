@@ -146,8 +146,14 @@ OPENAI_MODEL = gpt-5.5
 OPENAI_TIMEOUT = 30
 GOOGLE_STT_TIMEOUT = 20
 GOOGLE_LANGUAGE_TIMEOUT = 8
+HISTORY_CLASSIFICATION_ENABLED = True
+PLAYBACK_INTERRUPT_ENABLED = False
 GPT4FREE_SERVERS_STATUS = Active
 ```
+
+`HISTORY_CLASSIFICATION_ENABLED = True` garde la catégorisation de l'historique active, mais elle est lancée en arrière-plan pour ne pas retarder l'envoi de la question à OpenAI ou au fallback gpt4free. `Check_History` reste exécuté sur l'historique local avant la requête principale.
+
+`PLAYBACK_INTERRUPT_ENABLED = True` réactive l'écoute micro pendant la lecture d'une réponse afin de permettre une interruption vocale. La valeur par défaut est `False` pour éviter que Trinitty enregistre pendant qu'elle parle.
 
 
 ## gpt4free

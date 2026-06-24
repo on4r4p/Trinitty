@@ -436,6 +436,41 @@ def Append_Missing_User_Config_Options(user_conf):
     return True
 
 
+def Migrate_User_Config_Defaults(user_conf):
+    if not os.path.exists(user_conf):
+        return False
+
+    old_playback_interrupt_defaults = {
+        "PLAYBACK_INTERRUPT_ENABLED = True #True or False - listen for stop command while speaking",
+        "PLAYBACK_INTERRUPT_ENABLED = True # True or False - listen for stop command while speaking",
+    }
+    new_playback_interrupt_default = (
+        "PLAYBACK_INTERRUPT_ENABLED = False "
+        "#True records during playback to listen for stop commands"
+    )
+
+    with open(user_conf) as f:
+        lines = f.readlines()
+
+    changed = False
+    migrated_lines = []
+    for line in lines:
+        newline = "\n" if line.endswith("\n") else ""
+        stripped = line.strip()
+        if stripped in old_playback_interrupt_defaults:
+            migrated_lines.append(new_playback_interrupt_default + newline)
+            changed = True
+        else:
+            migrated_lines.append(line)
+
+    if not changed:
+        return False
+
+    with open(user_conf, "w") as f:
+        f.writelines(migrated_lines)
+    return True
+
+
 def Initialize_User_Data():
     root = User_Data_Root()
     created = []
@@ -461,6 +496,8 @@ def Initialize_User_Data():
     elif Write_File_If_Missing(user_conf, User_Config_Template()):
         created.append(user_conf)
     if Append_Missing_User_Config_Options(user_conf):
+        created.append(user_conf)
+    if Migrate_User_Config_Defaults(user_conf):
         created.append(user_conf)
 
     openai_key = os.path.join(root, "keys", "openai.key")
@@ -869,7 +906,7 @@ WAIT_FOR_TIMEOUT = 30.0
 WAIT_FOR_POLL_INTERVAL = 0.05
 PLAYBACK_POLL_INTERVAL = 0.05
 PLAYBACK_INTERRUPT_TIMEOUT = 30.0
-PLAYBACK_INTERRUPT_ENABLED = True
+PLAYBACK_INTERRUPT_ENABLED = False
 COMMAND_CLASSIFIER_ENABLED = False
 COMMAND_CLASSIFIER_THRESHOLD = 0.65
 COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"
@@ -879,6 +916,7 @@ STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
 GOOGLE_STT_TIMEOUT = 20.0
 GOOGLE_LANGUAGE_TIMEOUT = 8.0
+HISTORY_CLASSIFICATION_ENABLED = True
 RESULTS_HUB_MAX_ATTEMPTS = 2
 RESULTS_HUB_CONTINUE = object()
 GPT4FREE_COOKIES_LOADED = False
@@ -1134,30 +1172,70 @@ def parse_response(data):
     return final.replace("####", "").replace("###","")
 
 
-def Play_Wait_Response_Audio():
+def Play_Wait_Response_Audio(cancel_event=None):
     rnd = str(Non_Crypto_Randint(1, 10))
     wait = SCRIPT_PATH + "/local_sounds/wait/" + rnd + ".wav"
     PRINT("\n-Trinitty:wait response audio:%s" % wait)
-    return Play_Audio_File(wait)
+    if cancel_event is None:
+        return Play_Audio_File(wait)
+    return Play_Audio_File(wait, cancel_event=cancel_event)
 
 
-def To_Gpt(input):
+def Start_Wait_Response_Audio():
+    stop_event = Event()
 
-    Answer_Known = Check_History(input)
+    def play_wait_response_audio():
+        try:
+            Play_Wait_Response_Audio(cancel_event=stop_event)
+        except TypeError:
+            Play_Wait_Response_Audio()
+
+    listener = Thread(target=play_wait_response_audio, daemon=True)
+    listener.start()
+    return (stop_event, listener)
+
+
+def Stop_Wait_Response_Audio(listener_info):
+    if not listener_info:
+        return
+    stop_event, listener = listener_info
+    stop_event.set()
+    listener.join(timeout=0.2)
+
+
+def To_Gpt(input, wait_audio=None):
+
+    if wait_audio is None:
+        wait_audio = Start_Wait_Response_Audio()
+
+    def stop_wait_audio():
+        nonlocal wait_audio
+        Stop_Wait_Response_Audio(wait_audio)
+        wait_audio = None
+
+    Answer_Known = Check_History(input, before_replay=stop_wait_audio)
 
     if Answer_Known or not No_Input.empty():
+        stop_wait_audio()
         return Trinitty()
 
     last_sentence.put(input)
-    Play_Wait_Response_Audio()
 
     openai_response = Openai_Gpt(input)
     if openai_response:
+        stop_wait_audio()
         return Text_To_Speech(str(openai_response), stayawake=False)
 
     if GPT4FREE_SERVERS_STATUS and Ensure_Gpt4free_Providers():
-        return FreeGpt(input, check_history=False, save_last_sentence=False, play_wait=False)
+        return FreeGpt(
+            input,
+            check_history=False,
+            save_last_sentence=False,
+            play_wait=False,
+            wait_audio=wait_audio,
+        )
 
+    stop_wait_audio()
     print("\n-Trinitty:Error no OpenAI response and no gpt4free fallback provider available.")
     Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_respons_allprovider.wav")
     return Go_Back_To_Sleep(False)
@@ -1966,7 +2044,7 @@ def Refresh_Gpt4free_Providers_Config():
     return True
 
 
-def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True):
+def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True, wait_audio=None):
     PRINT("\n-Trinitty:Dans la fonction FreeGpt")
 
     global LAST_DIALOG
@@ -2018,11 +2096,17 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True):
             minitts(err_txt, generated_wav)
         return provider_name, generated_wav
 
+    def stop_wait_audio():
+        nonlocal wait_audio
+        Stop_Wait_Response_Audio(wait_audio)
+        wait_audio = None
+
     Answer_Known = False
     if check_history:
         Answer_Known = Check_History(input)
 
     if Answer_Known or not No_Input.empty():
+        stop_wait_audio()
         return Trinitty()
 
     if save_last_sentence:
@@ -2037,6 +2121,7 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True):
 
     providers_to_use = list(Providers_To_Use or [])
     if len(providers_to_use) == 0:
+        stop_wait_audio()
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_respons_allprovider.wav")
         return Go_Back_To_Sleep(False)
 
@@ -2044,11 +2129,12 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True):
         Current_Provider_Id = 0
 
     if not Ensure_Gpt4free_Runtime_Available():
+        stop_wait_audio()
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_respons_allprovider.wav")
         return Go_Back_To_Sleep(False)
 
-    if play_wait:
-        Play_Wait_Response_Audio()
+    if play_wait and wait_audio is None:
+        wait_audio = Start_Wait_Response_Audio()
 
     Ensure_Gpt4free_Cookies_Loaded()
 
@@ -2091,6 +2177,7 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True):
                     "\n-Trinitty:len(response) < 1:No answer from :",
                     provider_ref,
                 )
+                stop_wait_audio()
                 _provider_name, wait = provider_error_audio(provider_ref)
                 Play_Audio_File(wait)
                 advance_provider()
@@ -2099,6 +2186,7 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True):
 
                  print("\n-Trinitty:Error:Request ended with status code 404")
                  print("\n-Trinitty:No answer from :", provider_ref)
+                 stop_wait_audio()
                  _provider_name, wait = provider_error_audio(provider_ref)
                  Play_Audio_File(wait)
                  save_blacklist(provider_ref,"Request ended with status code 404")
@@ -2113,6 +2201,7 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True):
         except Exception as e:
             print("\n-Trinitty:Error:", str(e))
             print("\n-Trinitty:No answer from :", provider_ref)
+            stop_wait_audio()
             _provider_name, wait = provider_error_audio(provider_ref)
             Play_Audio_File(wait)
             save_blacklist(provider_ref, str(e))
@@ -2122,11 +2211,13 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True):
         p_cnt += 1
 
     if len(response_text) < 1:
+        stop_wait_audio()
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_respons_allprovider.wav")
         return Go_Back_To_Sleep(False)
     PRINT("\n-Trinitty:Le server %s à répondu." % successful_provider)
     advance_provider()
     ##checktime
+    stop_wait_audio()
     return Text_To_Speech(response_text, stayawake=False)
 
 def wake_up():
@@ -6133,7 +6224,7 @@ def Playback_Interrupt_Listener(stop_event, timeout=None):
     if (
         globals().get("INTERPRETOR", False)
         or globals().get("PUSH_TO_TALK", False)
-        or not globals().get("PLAYBACK_INTERRUPT_ENABLED", True)
+        or not globals().get("PLAYBACK_INTERRUPT_ENABLED", False)
     ):
         return False
 
@@ -6170,7 +6261,7 @@ def Start_Playback_Interrupt_Listener():
     if (
         globals().get("INTERPRETOR", False)
         or globals().get("PUSH_TO_TALK", False)
-        or not globals().get("PLAYBACK_INTERRUPT_ENABLED", True)
+        or not globals().get("PLAYBACK_INTERRUPT_ENABLED", False)
     ):
         return None
     Queue_Drain(audio_datas)
@@ -6190,7 +6281,7 @@ def Stop_Playback_Interrupt_Listener(listener_info):
     listener.join(timeout=0.2)
 
 
-def Run_Playback_Command(command):
+def Run_Playback_Command(command, cancel_event=None):
     if isinstance(command, str):
         PRINT("\n-Trinitty:Run_Playback_Command:refusing raw string command")
         return 127
@@ -6212,6 +6303,14 @@ def Run_Playback_Command(command):
 
     cancel_queue = globals().get("cancel_operation")
     while process.poll() is None:
+        if cancel_event is not None and cancel_event.is_set():
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1)
+            return 130
         if cancel_queue is not None and not cancel_queue.empty():
             process.terminate()
             try:
@@ -6225,13 +6324,17 @@ def Run_Playback_Command(command):
     return process.returncode
 
 
-def Play_Audio_File(filepath):
+def Play_Audio_File(filepath, cancel_event=None):
     filepath = str(filepath or "").strip()
     if not filepath:
         return 1
+    if cancel_event is None:
+        if filepath.lower().endswith(".wav"):
+            return Run_Playback_Command([APLAY_BIN, "-q", filepath])
+        return Run_Playback_Command([PLAY_BIN, "-q", filepath])
     if filepath.lower().endswith(".wav"):
-        return Run_Playback_Command([APLAY_BIN, "-q", filepath])
-    return Run_Playback_Command([PLAY_BIN, "-q", filepath])
+        return Run_Playback_Command([APLAY_BIN, "-q", filepath], cancel_event=cancel_event)
+    return Run_Playback_Command([PLAY_BIN, "-q", filepath], cancel_event=cancel_event)
 
 
 def Play_Response(audio_response=None, stay_awake=False, save_history=True, answer_txt=None):
@@ -7500,7 +7603,35 @@ new_input='%s'"""%(last_string,string)
         return string
 
 
-def Ensure_Current_Category(text_content=None):
+def History_Category_Known(categories=None):
+    if categories is None:
+        categories = globals().get("Current_Category", [])
+    if isinstance(categories, str):
+        categories = [categories]
+    if not categories:
+        return False
+    first_category = str(categories[0] or "").strip().lower()
+    return bool(first_category) and first_category != "nocat"
+
+
+def Start_History_Classification_Worker(text_content):
+    if not Config_Bool(globals().get("HISTORY_CLASSIFICATION_ENABLED", True), default=True):
+        return None
+    if not text_content or History_Category_Known():
+        return None
+
+    def classify_worker():
+        try:
+            Classify(text_content)
+        except Exception as e:
+            Log_Error("History_Classify_Worker", e)
+
+    worker = Thread(target=classify_worker, daemon=True)
+    worker.start()
+    return worker
+
+
+def Ensure_Current_Category(text_content=None, classify=None):
     global Current_Category
 
     if isinstance(Current_Category, str):
@@ -7510,7 +7641,14 @@ def Ensure_Current_Category(text_content=None):
     elif not isinstance(Current_Category, list):
         Current_Category = list(Current_Category)
 
-    if (len(Current_Category) == 0 or not str(Current_Category[0]).strip()) and text_content:
+    if classify is None:
+        classify = Config_Bool(globals().get("HISTORY_CLASSIFICATION_ENABLED", True), default=True)
+
+    if (
+        classify
+        and (len(Current_Category) == 0 or not str(Current_Category[0]).strip())
+        and text_content
+    ):
         Classify(text_content)
 
     if len(Current_Category) == 0 or not str(Current_Category[0]).strip():
@@ -7537,7 +7675,8 @@ def Save_History(answer, no_audio=False):
 
     PRINT("\n-Trinitty:last sentence:", txt)
 
-    categories = Ensure_Current_Category(txt)
+    Start_History_Classification_Worker(txt)
+    categories = Ensure_Current_Category(txt, classify=False)
 
     Cat_File = History_Category_File_Name(categories[0])
 
@@ -7636,15 +7775,18 @@ def Save_History(answer, no_audio=False):
         print("\n-Trinitty:Save_History:Error:%s" % str(e))
 
 
-def Check_History(question):
+def Check_History(question, before_replay=None):
 
     PRINT("\n-Trinitty:Dans la fonction Check_History")
 
     PRINT("\n-Trinitty:question:", question)
 
+    category_known_before_check = History_Category_Known()
+    Start_History_Classification_Worker(question)
+
     lemmatized = preprocess(question)
 
-    categories = Ensure_Current_Category(question)
+    categories = Ensure_Current_Category(question, classify=False)
 
     Cat_File = History_Category_File_Name(categories[0])
 
@@ -7667,44 +7809,43 @@ def Check_History(question):
 
 
 
-        if Cat_File == hist_file:
-            if hist_cats == Joined_Cat:
-                hist_input_for_score = hist_input_short or hist_input_full
-                score = similar(lemmatized, hist_input_for_score)
-                if "wikipedia" in hist_output:
-                    if score > 0.85:
+        if not category_known_before_check or (Cat_File == hist_file and hist_cats == Joined_Cat):
+            hist_input_for_score = hist_input_short or hist_input_full
+            score = similar(lemmatized, hist_input_for_score)
+            if "wikipedia" in hist_output:
+                if score > 0.85:
 
-                        PRINT("\n-Trinitty:hist_cats:", hist_cats)
-                        PRINT("\n-Trinitty:hist_input_full:", hist_input_full)
-                        PRINT("\n-Trinitty:hist_input_short:", hist_input_short)
-                        PRINT("\n-Trinitty:hist_answer:", hist_output)
-                        PRINT("\n-Trinitty:hist_wav:", hist_output_wav)
-                        PRINT("\n-Trinitty:Score:", score)
+                    PRINT("\n-Trinitty:hist_cats:", hist_cats)
+                    PRINT("\n-Trinitty:hist_input_full:", hist_input_full)
+                    PRINT("\n-Trinitty:hist_input_short:", hist_input_short)
+                    PRINT("\n-Trinitty:hist_answer:", hist_output)
+                    PRINT("\n-Trinitty:hist_wav:", hist_output_wav)
+                    PRINT("\n-Trinitty:Score:", score)
 
-                        Best_Score.append(score)
-                        if len(hist_input_full) > 0:
-                            Best_Txt.append(hist_input_full)
-                        else:
-                            Best_Txt.append(hist_input_short)
-                        Best_Answer.append(hist_output)
-                        Best_Wav.append(hist_output_wav)
+                    Best_Score.append(score)
+                    if len(hist_input_full) > 0:
+                        Best_Txt.append(hist_input_full)
+                    else:
+                        Best_Txt.append(hist_input_short)
+                    Best_Answer.append(hist_output)
+                    Best_Wav.append(hist_output_wav)
 
-                else:
-                    if score > 0.5:
-                        PRINT("\n-Trinitty:hist_cats:", hist_cats)
-                        PRINT("\n-Trinitty:hist_input_full:", hist_input_full)
-                        PRINT("\n-Trinitty:hist_input_short:", hist_input_short)
-                        PRINT("\n-Trinitty:hist_answer:", hist_output)
-                        PRINT("\n-Trinitty:hist_wav:", hist_output_wav)
-                        PRINT("\n-Trinitty:Score:", score)
+            else:
+                if score > 0.5:
+                    PRINT("\n-Trinitty:hist_cats:", hist_cats)
+                    PRINT("\n-Trinitty:hist_input_full:", hist_input_full)
+                    PRINT("\n-Trinitty:hist_input_short:", hist_input_short)
+                    PRINT("\n-Trinitty:hist_answer:", hist_output)
+                    PRINT("\n-Trinitty:hist_wav:", hist_output_wav)
+                    PRINT("\n-Trinitty:Score:", score)
 
-                        Best_Score.append(score)
-                        if len(hist_input_full) > 0:
-                            Best_Txt.append(hist_input_full)
-                        else:
-                            Best_Txt.append(hist_input_short)
-                        Best_Answer.append(hist_output)
-                        Best_Wav.append(hist_output_wav)
+                    Best_Score.append(score)
+                    if len(hist_input_full) > 0:
+                        Best_Txt.append(hist_input_full)
+                    else:
+                        Best_Txt.append(hist_input_short)
+                    Best_Answer.append(hist_output)
+                    Best_Wav.append(hist_output_wav)
 
     final_score = 0
     final_wav = ""
@@ -7718,6 +7859,9 @@ def Check_History(question):
             final_wav = w
 
     if len(final_wav) > 0:
+
+        if callable(before_replay):
+            before_replay()
 
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/already/1.wav")
         Play_Audio_File(final_wav)
@@ -7930,6 +8074,7 @@ def GetConf():
     global SPACY_MODEL
     global GOOGLE_STT_TIMEOUT
     global GOOGLE_LANGUAGE_TIMEOUT
+    global HISTORY_CLASSIFICATION_ENABLED
     global GOOGLE_SORT_BY_DATE
     global CHECK_UPDATE
     global CMD_DBG
@@ -7956,6 +8101,7 @@ def GetConf():
         "SPACY_MODEL",
         "GOOGLE_STT_TIMEOUT",
         "GOOGLE_LANGUAGE_TIMEOUT",
+        "HISTORY_CLASSIFICATION_ENABLED",
         "GOOGLE_SORT_BY_DATE",
         "GPT4FREE_SERVERS_LIST",
         "GPT4FREE_SERVERS_STATUS",
@@ -8027,7 +8173,7 @@ def GetConf():
                  PUSH_TO_TALK = Config_Bool(conf, default=False)
 
             elif option == "PLAYBACK_INTERRUPT_ENABLED":
-                 PLAYBACK_INTERRUPT_ENABLED = Config_Bool(conf, default=True)
+                 PLAYBACK_INTERRUPT_ENABLED = Config_Bool(conf, default=False)
 
             elif option == "PLAYBACK_INTERRUPT_TIMEOUT":
                 try:
@@ -8078,6 +8224,9 @@ def GetConf():
 
             elif option == "GOOGLE_LANGUAGE_TIMEOUT":
                 GOOGLE_LANGUAGE_TIMEOUT = Config_Positive_Float(conf, 8.0)
+
+            elif option == "HISTORY_CLASSIFICATION_ENABLED":
+                HISTORY_CLASSIFICATION_ENABLED = Config_Bool(conf, default=True)
 
             elif option == "GOOGLE_SORT_BY_DATE":
                 GOOGLE_SORT_BY_DATE = Config_Bool(conf, default=False)
@@ -8179,6 +8328,7 @@ OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
 SPACY_MODEL = fr_core_news_md
 GOOGLE_STT_TIMEOUT = 20
 GOOGLE_LANGUAGE_TIMEOUT = 8
+HISTORY_CLASSIFICATION_ENABLED = True
 GOOGLE_SORT_BY_DATE = False
 GPT4FREE_SERVERS_LIST = None #[g4f.Provider.PROVIDERNAME1,g4f.Provider.PROVIDERNAME2] or None
 GPT4FREE_SERVERS_STATUS = Active #Active or Unknown or All or None
@@ -8188,7 +8338,7 @@ GPT4FREE_COOKIES_SYNC_DIR = tools/har_and_cookies
 GPT4FREE_AUTO_REJECT_NOTWORKING = True
 INTERPRETOR = True # True or False
 PUSH_TO_TALK = False # True or False - press Enter instead of using wake word
-PLAYBACK_INTERRUPT_ENABLED = True # True or False - listen for stop command while speaking
+PLAYBACK_INTERRUPT_ENABLED = False # True records during playback to listen for stop commands
 PLAYBACK_INTERRUPT_TIMEOUT = 30 # seconds to keep listening during one playback
 COMMAND_CLASSIFIER_ENABLED = False # True or False - use optional TensorFlow command classifier
 COMMAND_CLASSIFIER_THRESHOLD = 0.65 # minimum classifier score to run command matching
@@ -8217,6 +8367,7 @@ XCB_ERROR_FIX = False #Fix Xcb error from popping due to DISPLAY env variable.""
         SPACY_MODEL = "fr_core_news_md"
         GOOGLE_STT_TIMEOUT = 20.0
         GOOGLE_LANGUAGE_TIMEOUT = 8.0
+        HISTORY_CLASSIFICATION_ENABLED = True
         GOOGLE_SORT_BY_DATE = False
         GPT4FREE_SERVERS_LIST = None
         SEARCH_DBG = False
@@ -8386,7 +8537,7 @@ if __name__ == "__main__":
     REMEMBER_LAST_15M = False
     INTERPRETOR = False
     PUSH_TO_TALK = False
-    PLAYBACK_INTERRUPT_ENABLED = True
+    PLAYBACK_INTERRUPT_ENABLED = False
     PLAYBACK_INTERRUPT_TIMEOUT = 30.0
     COMMAND_CLASSIFIER_ENABLED = False
     COMMAND_CLASSIFIER_THRESHOLD = 0.65
@@ -8410,6 +8561,7 @@ if __name__ == "__main__":
     SPACY_MODEL = "fr_core_news_md"
     GOOGLE_STT_TIMEOUT = 20.0
     GOOGLE_LANGUAGE_TIMEOUT = 8.0
+    HISTORY_CLASSIFICATION_ENABLED = True
     GOOGLE_SORT_BY_DATE = False
     CHECK_UPDATE = False
     DEBUG = False
@@ -8508,6 +8660,7 @@ if __name__ == "__main__":
     PRINT("-Trinitty:SPACY_MODEL:%s" % SPACY_MODEL)
     PRINT("-Trinitty:GOOGLE_STT_TIMEOUT:%s" % GOOGLE_STT_TIMEOUT)
     PRINT("-Trinitty:GOOGLE_LANGUAGE_TIMEOUT:%s" % GOOGLE_LANGUAGE_TIMEOUT)
+    PRINT("-Trinitty:HISTORY_CLASSIFICATION_ENABLED:%s" % HISTORY_CLASSIFICATION_ENABLED)
     PRINT("-Trinitty:GOOGLE_SORT_BY_DATE:%s" % GOOGLE_SORT_BY_DATE)
     PRINT("-Trinitty:GPT4FREE_SERVERS_LIST:%s" % GPT4FREE_SERVERS_LIST)
     PRINT("-Trinitty:GPT4FREE_SERVERS_STATUS:%s" % GPT4FREE_SERVERS_STATUS)

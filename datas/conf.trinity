@@ -9,6 +9,7 @@ OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
 SPACY_MODEL = fr_core_news_md
 GOOGLE_STT_TIMEOUT = 20 #seconds before cancelling Google Speech-to-Text
 GOOGLE_LANGUAGE_TIMEOUT = 8 #seconds before cancelling Google Natural Language classification
+HISTORY_CLASSIFICATION_ENABLED = True #True classifies history categories in a background worker
 GOOGLE_SORT_BY_DATE = False #True adds sort=date to Google Custom Search requests
 
 #needbrowser g4f.Provider.Gemini,g4f.Provider.HailuoAI,g4f.Provider.Cloudflare
@@ -27,7 +28,7 @@ GPT4FREE_COOKIES_SYNC_DIR = tools/har_and_cookies
 GPT4FREE_AUTO_REJECT_NOTWORKING = True #True rejects g4f providers marked working=False
 INTERPRETOR = False #True or False - use keyboard instead of mic
 PUSH_TO_TALK = False #True or False - press Enter instead of wake word
-PLAYBACK_INTERRUPT_ENABLED = True #True or False - listen for stop command while speaking
+PLAYBACK_INTERRUPT_ENABLED = False #True records during playback to listen for stop commands
 PLAYBACK_INTERRUPT_TIMEOUT = 30 #seconds to keep listening during one playback
 COMMAND_CLASSIFIER_ENABLED = False #True or False - use optional TensorFlow command classifier
 COMMAND_CLASSIFIER_THRESHOLD = 0.65 #minimum classifier score to run command matching
