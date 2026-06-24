@@ -131,6 +131,10 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 self.assertFalse((user_root / "datas" / "conf.local.trinity").exists())
                 self.assertTrue((user_root / "keys" / "openai.key").exists())
                 self.assertTrue((user_root / "keys" / "README.txt").exists())
+                user_installer = user_root / "install_dependencies.sh"
+                self.assertTrue(user_installer.exists())
+                self.assertTrue(os.access(user_installer, os.X_OK))
+                self.assertIn("install_user_launcher()", user_installer.read_text())
                 self.assertTrue((user_root / "history").is_dir())
                 self.assertTrue((user_root / "saved_answer" / "saved_error").is_dir())
                 user_conf = user_root / "datas" / "conf.trinity"
@@ -154,9 +158,11 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 openai_key = user_root / "keys" / "openai.key"
                 openai_key.write_text("sk-existing\n")
                 user_conf.write_text("OPENAI_MODEL = custom-user-model\n")
+                user_installer.write_text("# custom installer\n")
                 with contextlib.redirect_stdout(io.StringIO()):
                     trinitty.Initialize_User_Data()
                 self.assertEqual("sk-existing\n", openai_key.read_text())
+                self.assertEqual("# custom installer\n", user_installer.read_text())
                 updated_conf = user_conf.read_text()
                 self.assertTrue(updated_conf.startswith("OPENAI_MODEL = custom-user-model\n"))
                 self.assertIn("SPACY_MODEL = fr_core_news_md", updated_conf)
@@ -214,6 +220,24 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertIn(str(ROOT / "install_dependencies.sh"), help_text)
         self.assertIn("--system --venv", help_text)
+
+    def test_dependency_help_prefers_user_installer_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            installer = home / ".local" / "share" / "Trinitty" / "install_dependencies.sh"
+            installer.parent.mkdir(parents=True)
+            installer.write_text("#!/usr/bin/env bash\n")
+            original_home = os.environ.get("HOME")
+            try:
+                os.environ["HOME"] = str(home)
+                help_text = trinitty.Dependency_Install_Help("google-cloud-speech")
+            finally:
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+
+            self.assertIn(str(installer), help_text)
 
     def test_missing_dependency_message_uses_runtime_help_when_installer_is_absent(self):
         original_script_path = trinitty.Install_Dependencies_Script_Path

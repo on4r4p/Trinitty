@@ -123,6 +123,7 @@ Au premier lancement depuis une installation PyPI, Trinitty prépare automatique
 Les fichiers les plus utiles y sont créés sans écraser l'existant:
 
 - `datas/conf.trinity`: overrides locaux lus après la configuration fournie avec le package.
+- `install_dependencies.sh`: installateur local, copié sans écraser l'existant.
 - `keys/openai.key`: clé OpenAI, une seule ligne, sans guillemets.
 - `keys/README.txt`: rappel des fichiers de clés reconnus.
 - `history/`, `tmp/`, `saved_answer/`, `g4f_cookies/`: dossiers runtime.

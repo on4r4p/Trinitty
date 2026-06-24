@@ -209,16 +209,46 @@ def Write_File_If_Missing(filepath, content, mode=None):
     return True
 
 
-def Install_Dependencies_Script_Path():
-    candidates = [
+def Install_Dependencies_Source_Candidates():
+    return [
         os.path.join(os.getcwd(), "install_dependencies.sh"),
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_dependencies.sh"),
         os.path.join(Default_Script_Path(), "install_dependencies.sh"),
+    ]
+
+
+def Install_Dependencies_User_Path(root=None):
+    root = root or User_Data_Root()
+    return os.path.join(root, "install_dependencies.sh")
+
+
+def Install_Dependencies_Script_Path():
+    candidates = [
+        Install_Dependencies_User_Path(),
+        *Install_Dependencies_Source_Candidates(),
     ]
     for candidate in dict.fromkeys(candidates):
         if os.path.isfile(candidate):
             return os.path.abspath(candidate)
     return ""
+
+
+def Initialize_User_Installer(root=None):
+    root = root or User_Data_Root()
+    destination = Install_Dependencies_User_Path(root)
+    if os.path.exists(destination):
+        return False
+
+    for source in dict.fromkeys(Install_Dependencies_Source_Candidates()):
+        if os.path.isfile(source) and os.path.abspath(source) != os.path.abspath(destination):
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            copy2(source, destination)
+            try:
+                os.chmod(destination, 0o700)
+            except OSError:
+                pass
+            return True
+    return False
 
 
 def Dependency_Install_Help(package_name=None):
@@ -324,6 +354,9 @@ def Initialize_User_Data():
     keys_readme = os.path.join(root, "keys", "README.txt")
     if Write_File_If_Missing(keys_readme, User_Keys_Readme_Template()):
         created.append(keys_readme)
+
+    if Initialize_User_Installer(root):
+        created.append(Install_Dependencies_User_Path(root))
 
     if created:
         print("\n-Trinitty:Configuration utilisateur initialisée dans %s" % root)
