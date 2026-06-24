@@ -402,6 +402,55 @@ def Dependency_Available(module):
     return True
 
 
+def Subprocess_Returncode_Label(returncode):
+    if returncode is None:
+        return "no return code"
+    if returncode < 0:
+        signal_number = -returncode
+        try:
+            signal_name = signal.Signals(signal_number).name
+        except ValueError:
+            signal_name = "signal"
+        return "%s %s" % (signal_name, signal_number)
+    return "exit code %s" % returncode
+
+
+def Ensure_Gpt4free_Runtime_Available():
+    global GPT4FREE_RUNTIME_AVAILABLE
+
+    cached = globals().get("GPT4FREE_RUNTIME_AVAILABLE", None)
+    if cached is not None:
+        return cached
+
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-c", "import g4f\nimport g4f.cookies\n"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except Exception as e:
+        GPT4FREE_RUNTIME_AVAILABLE = False
+        print("\n-Trinitty:Warning:gpt4free indisponible, fallback désactivé:%s" % str(e))
+        return False
+
+    if probe.returncode != 0:
+        details = (probe.stderr or probe.stdout or "").strip().splitlines()
+        message = Subprocess_Returncode_Label(probe.returncode)
+        if details:
+            message = "%s: %s" % (message, details[-1])
+        GPT4FREE_RUNTIME_AVAILABLE = False
+        print("\n-Trinitty:Warning:gpt4free indisponible, fallback désactivé:%s" % message)
+        return False
+
+    GPT4FREE_RUNTIME_AVAILABLE = True
+    return True
+
+
 g4f = Optional_Import("g4f")
 pyaudio = Optional_Import("pyaudio")
 pvporcupine = Optional_Import("pvporcupine")
@@ -513,6 +562,8 @@ STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
 RESULTS_HUB_MAX_ATTEMPTS = 2
 RESULTS_HUB_CONTINUE = object()
+GPT4FREE_COOKIES_LOADED = False
+GPT4FREE_RUNTIME_AVAILABLE = None
 
 
 def Queue_Get_Optional(queue_obj, timeout=0.2, default=QUEUE_MISSING):
@@ -768,6 +819,10 @@ def To_Gpt(input):
 def Ensure_Gpt4free_Providers():
     global Providers_To_Use
 
+    if not Ensure_Gpt4free_Runtime_Available():
+        Providers_To_Use = []
+        return Providers_To_Use
+
     if Providers_To_Use:
         return Providers_To_Use
     if GPT4FREE_SERVERS_LIST:
@@ -967,6 +1022,8 @@ def Extract_First_Url(text):
 
 def Check_Free_Servers():
     PRINT("\n-Trinitty:Dans la fonction Check_Free_Servers")
+    if not Ensure_Gpt4free_Runtime_Available():
+        return []
     return Discover_Gpt4free_Text_Providers(GPT4FREE_SERVERS_AUTH)
 
 
@@ -1190,6 +1247,21 @@ def Load_Gpt4free_Cookies():
     return read_cookie_files(cookies_dir)
 
 
+def Ensure_Gpt4free_Cookies_Loaded():
+    global GPT4FREE_COOKIES_LOADED
+
+    if GPT4FREE_COOKIES_LOADED:
+        return True
+
+    try:
+        Load_Gpt4free_Cookies()
+        GPT4FREE_COOKIES_LOADED = True
+        return True
+    except Exception as e:
+        PRINT("\n-Trinitty:Warning:g4f cookies non chargés:%s" % str(e))
+        return False
+
+
 def Gpt4free_Model_List(value):
     if not value:
         return []
@@ -1363,6 +1435,9 @@ def Gpt4free_Provider_Is_Text_Chat(provider, auth_mode="no_auth"):
 
 
 def Discover_Gpt4free_Text_Providers(auth_mode="no_auth"):
+    if not Ensure_Gpt4free_Runtime_Available():
+        return []
+
     preferred_order = [
         "Qwen",
         "PollinationsAI",
@@ -1581,6 +1656,12 @@ def FreeGpt(input, check_history=True, save_last_sentence=True):
 
     if Current_Provider_Id >= len(providers_to_use) or Current_Provider_Id < 0:
         Current_Provider_Id = 0
+
+    if not Ensure_Gpt4free_Runtime_Available():
+        Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_respons_allprovider.wav")
+        return Go_Back_To_Sleep(False)
+
+    Ensure_Gpt4free_Cookies_Loaded()
 
     def advance_provider():
         global Current_Provider_Id
@@ -7743,18 +7824,21 @@ def Check_Update():
     Gpt4free_Is_Up = False
     Gpt4free_current_version = ""
     Gpt4free_latest_version = ""
-    try:
-        if hasattr(g4f, "version"):
-            if hasattr(g4f.version, "utils"):
-                if hasattr(g4f.version.utils, "current_version"):
-                    Gpt4free_current_version = g4f.version.utils.current_version
-                if hasattr(g4f.version.utils, "latest_version"):
-                    Gpt4free_latest_version = g4f.version.utils.latest_version
-        if Gpt4free_current_version == Gpt4free_latest_version:
-            Gpt4free_Is_Up = True
+    if Ensure_Gpt4free_Runtime_Available():
+        try:
+            if hasattr(g4f, "version"):
+                if hasattr(g4f.version, "utils"):
+                    if hasattr(g4f.version.utils, "current_version"):
+                        Gpt4free_current_version = g4f.version.utils.current_version
+                    if hasattr(g4f.version.utils, "latest_version"):
+                        Gpt4free_latest_version = g4f.version.utils.latest_version
+            if Gpt4free_current_version == Gpt4free_latest_version:
+                Gpt4free_Is_Up = True
 
-    except Exception as e:
-        print("\n-Trinitty:Error:Check_Update n'a pas pu déterminer la version de gpt4free:%s" % str(e))
+        except Exception as e:
+            print("\n-Trinitty:Error:Check_Update n'a pas pu déterminer la version de gpt4free:%s" % str(e))
+            Gpt4free_Is_Up = True
+    else:
         Gpt4free_Is_Up = True
 
     Trinitty_Is_Up = False
@@ -7833,6 +7917,8 @@ if __name__ == "__main__":
     GPT4FREE_SERVERS_AUTH = False
     GPT4FREE_COOKIES_AUTO_SYNC = True
     GPT4FREE_COOKIES_SYNC_DIR = "tools/har_and_cookies"
+    GPT4FREE_COOKIES_LOADED = False
+    GPT4FREE_RUNTIME_AVAILABLE = None
     GPT4FREE_AUTO_REJECT_NOTWORKING = True
     OPENAI_ENABLED = True
     OPENAI_API_KEY = ""
@@ -7911,9 +7997,6 @@ if __name__ == "__main__":
     ACTFILE = SCRIPT_PATH + "/datas/action.trinity"
     PREFILE = SCRIPT_PATH + "/datas/prefix.trinity"
     SYNFILE = SCRIPT_PATH + "/datas/synonym.trinity"
-
-    Load_Gpt4free_Cookies()
-
 
     if not Load_Csv():
         sys.exit(1)

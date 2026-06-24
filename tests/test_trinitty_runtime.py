@@ -33,6 +33,8 @@ def reset_command_state():
     trinitty.COMMAND_CLASSIFIER_MODEL = None
     trinitty.GPT4FREE_COOKIES_AUTO_SYNC = True
     trinitty.GPT4FREE_COOKIES_SYNC_DIR = "tools/har_and_cookies"
+    trinitty.GPT4FREE_COOKIES_LOADED = False
+    trinitty.GPT4FREE_RUNTIME_AVAILABLE = None
     trinitty.SCRIPT_PATH = str(ROOT)
     trinitty.LAST_DIALOG = []
     trinitty.unidecode = lambda value: value
@@ -141,10 +143,13 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 )
 
                 openai_key = user_root / "keys" / "openai.key"
+                user_conf = user_root / "datas" / "conf.trinity"
                 openai_key.write_text("sk-existing\n")
+                user_conf.write_text("OPENAI_MODEL = custom-user-model\n")
                 with contextlib.redirect_stdout(io.StringIO()):
                     trinitty.Initialize_User_Data()
                 self.assertEqual("sk-existing\n", openai_key.read_text())
+                self.assertEqual("OPENAI_MODEL = custom-user-model\n", user_conf.read_text())
             finally:
                 if original_home is None:
                     os.environ.pop("HOME", None)
@@ -541,8 +546,10 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
     def test_resolve_gpt4free_provider_rejects_executable_config(self):
         original_g4f = trinitty.g4f
+        original_runtime_available = getattr(trinitty, "GPT4FREE_RUNTIME_AVAILABLE", None)
         provider = SimpleNamespace(working=True)
         trinitty.g4f = SimpleNamespace(Provider=SimpleNamespace(Qwen=provider))
+        trinitty.GPT4FREE_RUNTIME_AVAILABLE = True
         try:
             self.assertIs(provider, trinitty.Resolve_Gpt4free_Provider("g4f.Provider.Qwen"))
             self.assertTrue(trinitty.Gpt4free_Provider_Working("g4f.Provider.Qwen"))
@@ -552,6 +559,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 trinitty.Resolve_Gpt4free_Provider("g4f.Provider.__class__")
         finally:
             trinitty.g4f = original_g4f
+            trinitty.GPT4FREE_RUNTIME_AVAILABLE = original_runtime_available
 
     def test_runtime_gpt4free_filter_removes_nonworking_without_prompt(self):
         original_status = getattr(trinitty, "GPT4FREE_SERVERS_STATUS", "Active")
@@ -1679,6 +1687,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         trinitty.SCRIPT_PATH = str(ROOT)
         trinitty.GPT4FREE_SERVERS_LIST = None
         trinitty.GPT4FREE_SERVERS_STATUS = "Active"
+        trinitty.GPT4FREE_RUNTIME_AVAILABLE = True
         trinitty.Providers_To_Use = None
         calls = []
         original_check_history = trinitty.Check_History
@@ -1755,6 +1764,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         original_g4f = trinitty.g4f
         original_last_sha = getattr(trinitty, "LAST_SHA", "")
         original_saved_answer = getattr(trinitty, "SAVED_ANSWER", "")
+        original_runtime_available = getattr(trinitty, "GPT4FREE_RUNTIME_AVAILABLE", None)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             trinitty.SAVED_ANSWER = str(root / "saved_answer")
@@ -1782,6 +1792,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     )
                 )
             )
+            trinitty.GPT4FREE_RUNTIME_AVAILABLE = True
             trinitty.sys.exit = lambda code=0: (_ for _ in ()).throw(SystemExit(code))
             try:
                 self.assertFalse(trinitty.Check_Update())
@@ -1791,6 +1802,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 trinitty.g4f = original_g4f
                 trinitty.LAST_SHA = original_last_sha
                 trinitty.SAVED_ANSWER = original_saved_answer
+                trinitty.GPT4FREE_RUNTIME_AVAILABLE = original_runtime_available
 
         self.assertEqual("Check_Update", trinitty.Runtime_Errors[-1]["context"])
         self.assertIn("update available", trinitty.Runtime_Errors[-1]["error"])
@@ -2336,6 +2348,38 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertTrue((dest / "chatgpt.com_Archive.har").exists())
             self.assertEqual([("set", str(dest)), ("read", str(dest))], calls)
 
+    def test_gpt4free_runtime_probe_disables_fallback_after_segfault(self):
+        reset_command_state()
+        original_run = trinitty.subprocess.run
+        trinitty.subprocess.run = lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=-11,
+            stdout="",
+            stderr="",
+        )
+        try:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertFalse(trinitty.Ensure_Gpt4free_Runtime_Available())
+        finally:
+            trinitty.subprocess.run = original_run
+
+        self.assertFalse(trinitty.GPT4FREE_RUNTIME_AVAILABLE)
+        self.assertIn("SIGSEGV 11", output.getvalue())
+
+    def test_ensure_gpt4free_cookies_loads_only_once(self):
+        reset_command_state()
+        calls = []
+        original_load = trinitty.Load_Gpt4free_Cookies
+        trinitty.Load_Gpt4free_Cookies = lambda: calls.append("load") or {"loaded": True}
+        try:
+            self.assertTrue(trinitty.Ensure_Gpt4free_Cookies_Loaded())
+            self.assertTrue(trinitty.Ensure_Gpt4free_Cookies_Loaded())
+        finally:
+            trinitty.Load_Gpt4free_Cookies = original_load
+
+        self.assertEqual(["load"], calls)
+        self.assertTrue(trinitty.GPT4FREE_COOKIES_LOADED)
+
     def test_log_error_records_list_and_file(self):
         reset_command_state()
         with tempfile.TemporaryDirectory() as tmp:
@@ -2516,6 +2560,8 @@ class TrinittyRuntimeTests(unittest.TestCase):
         trinitty.Providers_To_Use = ["g4f.Provider.Bad"]
         trinitty.Blacklisted = ["g4f.Provider.Bad"]
         trinitty.Current_Provider_Id = 0
+        trinitty.GPT4FREE_RUNTIME_AVAILABLE = True
+        trinitty.GPT4FREE_COOKIES_LOADED = True
         calls = []
         original_quit = trinitty.Quit
         original_play = trinitty.Play_Audio_File
@@ -2584,6 +2630,8 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Providers_To_Use = ["g4f.Provider.Qwen", "g4f.Provider.PollinationsAI"]
             trinitty.Blacklisted = []
             trinitty.Current_Provider_Id = 0
+            trinitty.GPT4FREE_RUNTIME_AVAILABLE = True
+            trinitty.GPT4FREE_COOKIES_LOADED = True
             calls = []
             original_g4f = trinitty.g4f
             original_resolve = trinitty.Resolve_Gpt4free_Provider
@@ -2636,6 +2684,8 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Providers_To_Use = ["g4f.Provider.NewProvider", "g4f.Provider.PollinationsAI"]
             trinitty.Blacklisted = []
             trinitty.Current_Provider_Id = 0
+            trinitty.GPT4FREE_RUNTIME_AVAILABLE = True
+            trinitty.GPT4FREE_COOKIES_LOADED = True
             calls = []
 
             class FakeClient:
