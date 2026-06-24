@@ -112,6 +112,81 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 trinitty.__file__ = original_file
                 trinitty.site.getuserbase = original_userbase
 
+    def test_initialize_user_data_creates_common_files_without_overwriting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            original_home = os.environ.get("HOME")
+            try:
+                os.environ["HOME"] = str(home)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    user_root = Path(trinitty.Initialize_User_Data())
+
+                self.assertEqual(home / ".local" / "share" / "Trinitty", user_root)
+                self.assertTrue((user_root / "datas" / "conf.trinity").exists())
+                self.assertFalse((user_root / "datas" / "conf.local.trinity").exists())
+                self.assertTrue((user_root / "keys" / "openai.key").exists())
+                self.assertTrue((user_root / "keys" / "README.txt").exists())
+                self.assertTrue((user_root / "history").is_dir())
+                self.assertTrue((user_root / "saved_answer" / "saved_error").is_dir())
+                self.assertIn(
+                    "OPENAI_API_KEY_FILE = keys/openai.key",
+                    (user_root / "datas" / "conf.trinity").read_text(),
+                )
+                self.assertIn("Dossier utilisateur: %s" % user_root, output.getvalue())
+                self.assertIn(
+                    "Configuration modifiable: %s" % (user_root / "datas" / "conf.trinity"),
+                    output.getvalue(),
+                )
+
+                openai_key = user_root / "keys" / "openai.key"
+                openai_key.write_text("sk-existing\n")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    trinitty.Initialize_User_Data()
+                self.assertEqual("sk-existing\n", openai_key.read_text())
+            finally:
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+
+    def test_initialize_user_data_migrates_legacy_user_local_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            datas = home / ".local" / "share" / "Trinitty" / "datas"
+            datas.mkdir(parents=True)
+            legacy_conf = datas / "conf.local.trinity"
+            legacy_conf.write_text("OPENAI_MODEL = old-user-model\n")
+            original_home = os.environ.get("HOME")
+            try:
+                os.environ["HOME"] = str(home)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    user_root = Path(trinitty.Initialize_User_Data())
+            finally:
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+
+            self.assertEqual("OPENAI_MODEL = old-user-model\n", (user_root / "datas" / "conf.trinity").read_text())
+            self.assertEqual("OPENAI_MODEL = old-user-model\n", legacy_conf.read_text())
+
+    def test_user_data_path_keeps_legacy_lowercase_directory_compatible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            legacy = home / ".local" / "share" / "trinitty"
+            legacy.mkdir(parents=True)
+            original_home = os.environ.get("HOME")
+            try:
+                os.environ["HOME"] = str(home)
+                self.assertEqual(str(legacy / "keys" / "openai.key"), trinitty.User_Data_Path("keys", "openai.key"))
+            finally:
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+
     def test_runtime_writable_dirs_fall_back_to_user_data_when_script_path_is_not_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -127,11 +202,11 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 os.environ["HOME"] = str(home)
 
                 self.assertEqual(
-                    str(home / ".local" / "share" / "trinitty" / "tmp" / "current_answer.wav"),
+                    str(home / ".local" / "share" / "Trinitty" / "tmp" / "current_answer.wav"),
                     trinitty.Runtime_Tmp_Path("current_answer.wav"),
                 )
                 self.assertEqual(
-                    str(home / ".local" / "share" / "trinitty" / "history" / "nocat"),
+                    str(home / ".local" / "share" / "Trinitty" / "history" / "nocat"),
                     trinitty.History_File_Path("nocat"),
                 )
             finally:
@@ -366,7 +441,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             fake_script_path = root / "installed-file"
             fake_script_path.write_text("")
             home = root / "home"
-            key_file = home / ".local" / "share" / "trinitty" / "keys" / "openai.key"
+            key_file = home / ".local" / "share" / "Trinitty" / "keys" / "openai.key"
             key_file.parent.mkdir(parents=True)
             key_file.write_text("sk-user-data-key\n")
             missing = object()
@@ -459,7 +534,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 else:
                     os.environ["HOME"] = original_home
 
-            expected = fallback_home / ".local" / "share" / "trinitty" / "saved_answer"
+            expected = fallback_home / ".local" / "share" / "Trinitty" / "saved_answer"
             self.assertEqual(str(expected), resolved)
             self.assertEqual(str(expected), trinitty.SAVED_ANSWER)
             self.assertTrue((expected / "saved_error").exists())
@@ -1959,6 +2034,50 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertEqual("Keep # as plain text", trinitty.OPENAI_INSTRUCTIONS)
             self.assertTrue((local_saved / "saved_error").exists())
 
+    def test_getconf_loads_user_data_override_after_packaged_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            datas = root / "package" / "datas"
+            user_datas = home / ".local" / "share" / "Trinitty" / "datas"
+            datas.mkdir(parents=True)
+            user_datas.mkdir(parents=True)
+            (datas / "conf.trinity").write_text(
+                "\n".join(
+                    [
+                        "SAVED_ANSWER = default",
+                        "OPENAI_MODEL = package-model",
+                        "OPENAI_TIMEOUT = 30",
+                        "GPT4FREE_SERVERS_STATUS = Active",
+                    ]
+                )
+            )
+            (user_datas / "conf.trinity").write_text(
+                "OPENAI_MODEL = user-model\nOPENAI_TIMEOUT = 4\nGPT4FREE_SERVERS_STATUS = None\n"
+            )
+            original_home = os.environ.get("HOME")
+            missing = object()
+            original_script_path = getattr(trinitty, "SCRIPT_PATH", missing)
+            try:
+                os.environ["HOME"] = str(home)
+                trinitty.SCRIPT_PATH = str(root / "package")
+                trinitty.GPT4FREE_SERVERS_LIST = None
+                trinitty.GPT4FREE_SERVERS_STATUS = "Active"
+                trinitty.GetConf()
+            finally:
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+                if original_script_path is missing:
+                    delattr(trinitty, "SCRIPT_PATH")
+                else:
+                    trinitty.SCRIPT_PATH = original_script_path
+
+            self.assertEqual("user-model", trinitty.OPENAI_MODEL)
+            self.assertEqual(4.0, trinitty.OPENAI_TIMEOUT)
+            self.assertIsNone(trinitty.GPT4FREE_SERVERS_STATUS)
+
     def test_getconf_accepts_quoted_gpt4free_provider_list(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2115,7 +2234,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 trinitty.SCRIPT_PATH = str(fake_script_path)
                 os.environ["HOME"] = str(home)
                 self.assertEqual(
-                    str(home / ".local" / "share" / "trinitty" / "g4f_cookies"),
+                    str(home / ".local" / "share" / "Trinitty" / "g4f_cookies"),
                     trinitty.Gpt4free_Cookies_Dir(),
                 )
             finally:

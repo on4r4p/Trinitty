@@ -113,8 +113,28 @@ install_system_dependencies() {
     libttspico-utils \
     portaudio19-dev \
     python3-dev \
+    python3-pyaudio \
     python3-venv \
     sox
+}
+
+platform_machine() {
+  "$PYTHON_BIN" - <<'PY'
+import platform
+
+print(platform.machine().lower())
+PY
+}
+
+is_linux_arm() {
+  case "$(platform_machine)" in
+    aarch64|armv6l|armv7l)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 check_python_build_dependencies() {
@@ -137,6 +157,13 @@ PY
 
   if [[ ! -f /usr/include/portaudio.h ]]; then
     missing+=("portaudio19-dev")
+  fi
+
+  if is_linux_arm && ! /usr/bin/python3 - <<'PY' >/dev/null 2>&1
+import pyaudio
+PY
+  then
+    missing+=("python3-pyaudio")
   fi
 
   if ! command -v sox >/dev/null 2>&1; then
@@ -218,6 +245,46 @@ select_venv_dir() {
   exit 1
 }
 
+link_system_pyaudio_on_arm() {
+  if ! is_linux_arm; then
+    return
+  fi
+
+  if "$PYTHON_BIN" - <<'PY' >/dev/null 2>&1
+import pyaudio
+PY
+  then
+    return
+  fi
+
+  local target_site
+  target_site="$("$PYTHON_BIN" - <<'PY'
+import sysconfig
+
+print(sysconfig.get_paths()["purelib"])
+PY
+)"
+
+  /usr/bin/python3 - <<PY
+import glob
+import pathlib
+import pyaudio
+
+target_site = pathlib.Path("$target_site")
+source_pkg = pathlib.Path(pyaudio.__file__).resolve().parent
+
+links = [source_pkg]
+links.extend(pathlib.Path(path) for path in glob.glob(str(source_pkg.parent / "_portaudio*.so")))
+
+for source in links:
+    target = target_site / source.name
+    if target.exists() or target.is_symlink():
+        target.unlink()
+    target.symlink_to(source)
+    print(f"Linked system PyAudio: {target} -> {source}")
+PY
+}
+
 if [[ "$INSTALL_SYSTEM" -eq 1 ]]; then
   install_system_dependencies
 fi
@@ -229,7 +296,9 @@ if [[ "$USE_VENV" -eq 1 ]]; then
   "$PYTHON_BIN" -m venv "$ROOT_DIR/$VENV_DIR"
   # shellcheck source=/dev/null
   source "$ROOT_DIR/$VENV_DIR/bin/activate"
+  export PYTHONNOUSERSITE=1
   PYTHON_BIN="$ROOT_DIR/$VENV_DIR/bin/python"
+  link_system_pyaudio_on_arm
 fi
 
 "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel

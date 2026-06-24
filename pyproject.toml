@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trinitty"
-version = "0.1.1"
+version = "0.1.2"
 description = "Personal voice assistant using OpenAI, g4f fallback providers, Google Cloud speech services, and local audio assets."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
   "g4f>=6.6,<7",
   "openai>=2.0,<3",
-  "PyAudio>=0.2.13",
+  "PyAudio>=0.2.13; platform_machine != 'aarch64' and platform_machine != 'armv7l' and platform_machine != 'armv6l'",
   "pvporcupine>=3.0.0,<4.0.0",
   "webrtcvad-wheels>=2.0.14",
   "requests>=2.31",

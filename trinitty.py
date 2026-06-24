@@ -75,6 +75,25 @@ MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août
 
 APLAY_BIN = which("aplay") or "aplay"
 PLAY_BIN = which("play") or "play"
+USER_DATA_DIR_NAME = "Trinitty"
+LEGACY_USER_DATA_DIR_NAME = "trinitty"
+
+
+def User_Data_Base_Path():
+    return os.path.join(os.path.expanduser("~"), ".local", "share")
+
+
+def User_Data_Root():
+    base_path = User_Data_Base_Path()
+    canonical_path = os.path.join(base_path, USER_DATA_DIR_NAME)
+    legacy_path = os.path.join(base_path, LEGACY_USER_DATA_DIR_NAME)
+    if os.path.exists(legacy_path) and not os.path.exists(canonical_path):
+        return legacy_path
+    return canonical_path
+
+
+def Legacy_User_Data_Root():
+    return os.path.join(User_Data_Base_Path(), LEGACY_USER_DATA_DIR_NAME)
 
 
 def Default_Script_Path():
@@ -89,7 +108,124 @@ def Default_Script_Path():
 
 
 def User_Data_Path(*parts):
-    return os.path.join(os.path.expanduser("~"), ".local", "share", "trinitty", *parts)
+    return os.path.join(User_Data_Root(), *parts)
+
+
+def User_Data_Path_Candidates(*parts):
+    candidates = [
+        os.path.join(User_Data_Root(), *parts),
+        os.path.join(Legacy_User_Data_Root(), *parts),
+    ]
+    return list(dict.fromkeys(candidates))
+
+
+def Config_File_Candidates(relative_path):
+    relative_path = str(relative_path or "").strip()
+    if not relative_path:
+        return []
+    relative_path = os.path.expandvars(os.path.expanduser(relative_path))
+    if os.path.isabs(relative_path):
+        return [relative_path]
+    script_path = globals().get("SCRIPT_PATH", Default_Script_Path())
+    return [os.path.join(script_path, relative_path), *User_Data_Path_Candidates(relative_path)]
+
+
+def Existing_Config_File(relative_path):
+    for candidate in Config_File_Candidates(relative_path):
+        if os.path.exists(candidate):
+            return candidate
+    return ""
+
+
+def Write_File_If_Missing(filepath, content, mode=None):
+    if os.path.exists(filepath):
+        return False
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, "w") as f:
+        f.write(content)
+    if mode is not None:
+        try:
+            os.chmod(filepath, mode)
+        except OSError:
+            pass
+    return True
+
+
+def Initialize_User_Data():
+    root = User_Data_Root()
+    created = []
+    for dirname in [
+        "datas",
+        "keys",
+        "history",
+        "tmp",
+        "g4f_cookies",
+        os.path.join("saved_answer", "saved_error"),
+    ]:
+        path = os.path.join(root, dirname)
+        if not os.path.isdir(path):
+            os.makedirs(path, exist_ok=True)
+            created.append(path)
+
+    user_conf = os.path.join(root, "datas", "conf.trinity")
+    legacy_user_conf = os.path.join(root, "datas", "conf.local.trinity")
+    if not os.path.exists(user_conf) and os.path.exists(legacy_user_conf):
+        os.makedirs(os.path.dirname(user_conf), exist_ok=True)
+        copy2(legacy_user_conf, user_conf)
+        created.append(user_conf)
+    elif Write_File_If_Missing(user_conf, User_Config_Template()):
+        created.append(user_conf)
+
+    openai_key = os.path.join(root, "keys", "openai.key")
+    if Write_File_If_Missing(openai_key, "# Collez la cle OpenAI ici, sans guillemets.\n", mode=0o600):
+        created.append(openai_key)
+
+    keys_readme = os.path.join(root, "keys", "README.txt")
+    if Write_File_If_Missing(keys_readme, User_Keys_Readme_Template()):
+        created.append(keys_readme)
+
+    if created:
+        print("\n-Trinitty:Configuration utilisateur initialisée dans %s" % root)
+    print("\n-Trinitty:Dossier utilisateur: %s" % root)
+    print("-Trinitty:Configuration modifiable: %s" % user_conf)
+    return root
+
+
+def User_Config_Template():
+    return """# Overrides locaux de Trinitty.
+# Ce fichier est lu apres la configuration fournie avec le package.
+# Les fichiers existants ne sont pas ecrases par Trinitty.
+
+SAVED_ANSWER = default
+OPENAI_ENABLED = True
+OPENAI_API_KEY_FILE = keys/openai.key
+OPENAI_MODEL = gpt-5.5
+OPENAI_TIMEOUT = 30
+OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
+
+# Mettre a True pour eviter le wake word et lancer l'ecoute avec Entree.
+PUSH_TO_TALK = False
+
+# OpenAI reste prioritaire. gpt4free sert de secours si OpenAI echoue.
+GPT4FREE_SERVERS_LIST = None
+GPT4FREE_SERVERS_STATUS = Active
+GPT4FREE_SERVERS_AUTH = False
+"""
+
+
+def User_Keys_Readme_Template():
+    return """Fichiers de cles reconnus par Trinitty:
+
+openai.key                 cle API OpenAI, une seule ligne, sans guillemets
+pico.key                   cle Picovoice/Porcupine pour le wake word
+detectlanguage.key          cle detectlanguage.com
+google_translate.key        cle Google Translate API
+google_search.key           cle Google Custom Search API
+google_search_engine.id     identifiant du moteur Google Custom Search
+google_adc.json             credentials Google Cloud ADC
+
+Ne versionnez pas ce dossier.
+"""
 
 
 def Writable_Dir_From_Candidates(candidates):
@@ -247,9 +383,14 @@ def ignoreStderr():
 
 def Configure_Default_Google_Credentials():
     env_name = "GOOGLE_APPLICATION_CREDENTIALS"
-    credentials_path = os.path.join(Default_Script_Path(), "keys", "google_adc.json")
-    if not os.environ.get(env_name) and os.path.exists(credentials_path):
-        os.environ[env_name] = credentials_path
+    credential_candidates = [
+        os.path.join(Default_Script_Path(), "keys", "google_adc.json"),
+        *User_Data_Path_Candidates("keys", "google_adc.json"),
+    ]
+    for credentials_path in credential_candidates:
+        if not os.environ.get(env_name) and os.path.exists(credentials_path):
+            os.environ[env_name] = credentials_path
+            break
 
 
 Configure_Default_Google_Credentials()
@@ -323,8 +464,9 @@ def Stop_Recording():
 
 def PicoLoadKeys():
     PRINT("\n-Trinitty:Dans fonction PicoLoadKeys")
-    if os.path.exists(SCRIPT_PATH + "/keys/pico.key"):
-        with open(SCRIPT_PATH + "/keys/pico.key") as k:
+    key_path = Existing_Config_File("keys/pico.key")
+    if key_path:
+        with open(key_path) as k:
             PICO_KEY = k.read()
             PICO_KEY = PICO_KEY.strip()
         if not PICO_KEY.endswith("=="):
@@ -333,13 +475,14 @@ def PicoLoadKeys():
         else:
             return PICO_KEY
     else:
-        print("\n-Trinitty:-%s/keys/pico.key doesn't exist." % SCRIPT_PATH)
+        print("\n-Trinitty:-keys/pico.key doesn't exist.")
         return None
 
 def DetectLanguageLoadKeys():
     PRINT("\n-Trinitty:Dans fonction DetectLanguageLoadKeys")
-    if os.path.exists(SCRIPT_PATH + "/keys/detectlanguage.key"):
-        with open(SCRIPT_PATH + "/keys/detectlanguage.key") as k:
+    key_path = Existing_Config_File("keys/detectlanguage.key")
+    if key_path:
+        with open(key_path) as k:
             DLANG_KEY = k.read()
             DLANG_KEY = DLANG_KEY.strip()
         if len(DLANG_KEY) != 32:
@@ -348,7 +491,7 @@ def DetectLanguageLoadKeys():
         else:
             return DLANG_KEY
     else:
-        print("\n-Trinitty:-%s/keys/detectlanguage.key doesn't exist." % SCRIPT_PATH)
+        print("\n-Trinitty:-keys/detectlanguage.key doesn't exist.")
         #sys.exit()
         return None
 
@@ -359,36 +502,39 @@ def GoogleLoadKeys():
     GOOGLE_ENGINE = ""
     GOOGLE_TRANSLATE = ""
 
-    if os.path.exists(SCRIPT_PATH + "/keys/google_translate.key"):
-        with open(SCRIPT_PATH + "/keys/google_translate.key") as k:
+    google_translate_path = Existing_Config_File("keys/google_translate.key")
+    if google_translate_path:
+        with open(google_translate_path) as k:
             GOOGLE_TRANSLATE = k.read()
             GOOGLE_TRANSLATE = GOOGLE_TRANSLATE.strip()
         if len(GOOGLE_TRANSLATE) != 39:
             print("\n-Trinitty:-Wrong Google Translate Api key (len).")
             GOOGLE_TRANSLATE = ""
     else:
-        print("\n-Trinitty:-%s/keys/google_translate.key doesn't exist." % SCRIPT_PATH)
+        print("\n-Trinitty:-keys/google_translate.key doesn't exist.")
 
 
-    if os.path.exists(SCRIPT_PATH + "/keys/google_search.key"):
-        with open(SCRIPT_PATH + "/keys/google_search.key") as k:
+    google_search_path = Existing_Config_File("keys/google_search.key")
+    if google_search_path:
+        with open(google_search_path) as k:
             GOOGLE_KEY = k.read()
             GOOGLE_KEY = GOOGLE_KEY.strip()
         if len(GOOGLE_KEY) != 39:
             print("\n-Trinitty:-Wrong Google Api key (len).")
             GOOGLE_KEY = ""
     else:
-        print("\n-Trinitty:-%s/keys/google_search_engine.key doesn't exist." % SCRIPT_PATH)
+        print("\n-Trinitty:-keys/google_search.key doesn't exist.")
 
-    if os.path.exists(SCRIPT_PATH + "/keys/google_search_engine.id"):
-        with open(SCRIPT_PATH + "/keys/google_search_engine.id") as k:
+    google_engine_path = Existing_Config_File("keys/google_search_engine.id")
+    if google_engine_path:
+        with open(google_engine_path) as k:
             GOOGLE_ENGINE = k.read()
             GOOGLE_ENGINE = GOOGLE_ENGINE.strip()
         if len(GOOGLE_ENGINE) != 17:
             print("\n-Trinitty:-Wrong Google engine id (len).")
             GOOGLE_ENGINE = ""
     else:
-        print("\n-Trinitty:-%s/keys/google_search_engine.id doesn't exist." % SCRIPT_PATH)
+        print("\n-Trinitty:-keys/google_search_engine.id doesn't exist.")
 
     return (GOOGLE_KEY, GOOGLE_ENGINE,GOOGLE_TRANSLATE)
 
@@ -570,11 +716,7 @@ def Openai_Config_Path_Candidates(path):
     path = os.path.expandvars(os.path.expanduser(path))
     if os.path.isabs(path):
         return [path]
-    script_path = globals().get("SCRIPT_PATH", Default_Script_Path())
-    return [
-        os.path.join(script_path, path),
-        User_Data_Path(path),
-    ]
+    return Config_File_Candidates(path)
 
 
 def Openai_Existing_Config_Path(path):
@@ -807,6 +949,8 @@ def Read_Raw_Runtime_Config():
     for conf_file in (
         os.path.join(script_path, "datas", "conf.trinity"),
         os.path.join(script_path, "datas", "conf.local.trinity"),
+        *User_Data_Path_Candidates("datas", "conf.local.trinity"),
+        *User_Data_Path_Candidates("datas", "conf.trinity"),
     ):
         config.update(Read_Raw_Config(conf_file))
     return config
@@ -909,7 +1053,7 @@ def Gpt4free_Provider_Key_Available(provider):
         ]
         if any(os.environ.get(env_name) for env_name in env_names):
             return True
-        key_file = os.path.join(globals().get("SCRIPT_PATH", "."), "keys", "g4f_%s.key" % token)
+        key_file = Existing_Config_File("keys/g4f_%s.key" % token)
         if os.path.exists(key_file) and os.path.getsize(key_file) > 0:
             return True
     return False
@@ -990,7 +1134,7 @@ def Default_Saved_Answer_Path():
 
 
 def User_Saved_Answer_Path():
-    return os.path.join(os.path.expanduser("~"), ".local", "share", "trinitty", "saved_answer")
+    return User_Data_Path("saved_answer")
 
 
 def Configure_Saved_Answer_Path(configured):
@@ -7232,6 +7376,8 @@ def GetConf():
     conf_files = [
         SCRIPT_PATH + "/datas/conf.trinity",
         SCRIPT_PATH + "/datas/conf.local.trinity",
+        *User_Data_Path_Candidates("datas", "conf.local.trinity"),
+        *User_Data_Path_Candidates("datas", "conf.trinity"),
     ]
     existing_conf_files = [conf_file for conf_file in conf_files if os.path.exists(conf_file)]
 
@@ -7605,6 +7751,8 @@ if __name__ == "__main__":
     XCB_ERROR_FIX = False
     SAVED_ANSWER = SCRIPT_PATH + "/local_sounds/saved_answer/"
 
+    Initialize_User_Data()
+    Configure_Default_Google_Credentials()
     Refresh_Gpt4free_Providers_Config()
     GetConf()
 

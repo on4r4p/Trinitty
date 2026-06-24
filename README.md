@@ -69,7 +69,7 @@ Ne pas mettre de guillemets autour de la clé. Les lignes vides et les commentai
 Pour une installation PyPI, Trinitty vérifie aussi:
 
 ```bash
-~/.local/share/trinitty/keys/openai.key
+~/.local/share/Trinitty/keys/openai.key
 ```
 
 Il est également possible d'utiliser une variable d'environnement:
@@ -78,11 +78,20 @@ Il est également possible d'utiliser une variable d'environnement:
 export OPENAI_API_KEY='sk-...'
 ```
 
-La configuration par défaut est dans `datas/conf.trinity`. Pour éviter de publier des chemins ou préférences locales, placer les overrides dans:
+Au premier lancement depuis une installation PyPI, Trinitty prépare automatiquement le dossier utilisateur:
 
 ```bash
-datas/conf.local.trinity
+~/.local/share/Trinitty/
 ```
+
+Les fichiers les plus utiles y sont créés sans écraser l'existant:
+
+- `datas/conf.trinity`: overrides locaux lus après la configuration fournie avec le package.
+- `keys/openai.key`: clé OpenAI, une seule ligne, sans guillemets.
+- `keys/README.txt`: rappel des fichiers de clés reconnus.
+- `history/`, `tmp/`, `saved_answer/`, `g4f_cookies/`: dossiers runtime.
+
+La configuration par défaut fournie avec le package est dans `datas/conf.trinity`. Pour éviter de publier des chemins ou préférences locales, placer les overrides dans `~/.local/share/Trinitty/datas/conf.trinity`.
 
 Exemple:
 
@@ -126,7 +135,7 @@ Trinitty écrit les réponses audio sauvegardées, l'historique, les erreurs et 
 Dans un checkout local, les chemins par défaut restent proches du dépôt. En installation PyPI ou si le dossier installé n'est pas inscriptible, Trinitty bascule vers:
 
 ```bash
-~/.local/share/trinitty/
+~/.local/share/Trinitty/
 ```
 
 Cela évite d'écrire dans le dossier du package installé.
