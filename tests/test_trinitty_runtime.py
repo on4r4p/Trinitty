@@ -1673,6 +1673,39 @@ class TrinittyRuntimeTests(unittest.TestCase):
             calls,
         )
 
+    def test_to_gpt_discovers_g4f_only_after_openai_fails(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.SCRIPT_PATH = str(ROOT)
+        trinitty.GPT4FREE_SERVERS_LIST = None
+        trinitty.GPT4FREE_SERVERS_STATUS = "Active"
+        trinitty.Providers_To_Use = None
+        calls = []
+        original_check_history = trinitty.Check_History
+        original_openai = trinitty.Openai_Gpt
+        original_refresh = trinitty.Refresh_Gpt4free_Providers_Config
+        original_getconf = trinitty.GetConf
+        original_check_servers = trinitty.Check_Free_Servers
+        original_freegpt = trinitty.FreeGpt
+        trinitty.Check_History = lambda _text: False
+        trinitty.Openai_Gpt = lambda _text: ""
+        trinitty.Refresh_Gpt4free_Providers_Config = lambda: calls.append("refresh") or False
+        trinitty.GetConf = lambda: calls.append("getconf")
+        trinitty.Check_Free_Servers = lambda: calls.append("check_servers") or ["g4f.Provider.Qwen"]
+        trinitty.FreeGpt = lambda text, **_kwargs: calls.append(("freegpt", text)) or "freegpt"
+        try:
+            self.assertEqual("freegpt", trinitty.To_Gpt("question"))
+        finally:
+            trinitty.Check_History = original_check_history
+            trinitty.Openai_Gpt = original_openai
+            trinitty.Refresh_Gpt4free_Providers_Config = original_refresh
+            trinitty.GetConf = original_getconf
+            trinitty.Check_Free_Servers = original_check_servers
+            trinitty.FreeGpt = original_freegpt
+
+        self.assertEqual(["refresh", "getconf", "check_servers", ("freegpt", "question")], calls)
+        self.assertEqual(["g4f.Provider.Qwen"], trinitty.Providers_To_Use)
+
     def test_load_csv_missing_required_file_returns_false_without_exit(self):
         reset_command_state()
         original_exit = trinitty.sys.exit

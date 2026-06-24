@@ -300,25 +300,106 @@ class MissingDependency:
         return False
 
 
+class LazyOptionalModule:
+    def __init__(self, import_name, package_name=None):
+        self.import_name = import_name
+        self.package_name = package_name or import_name
+        self._module = None
+        self._missing = None
+
+    def _load(self):
+        if self._module is not None:
+            return self._module
+        if self._missing is not None:
+            self._missing._raise()
+
+        try:
+            self._module = importlib.import_module(self.import_name)
+        except Exception as e:
+            OPTIONAL_DEPENDENCY_ERRORS[self.import_name] = e
+            self._missing = MissingDependency(self.import_name, self.package_name, e)
+            self._missing._raise()
+        return self._module
+
+    def is_available(self):
+        if self._module is not None:
+            return True
+        if self._missing is not None:
+            return False
+        try:
+            self._load()
+        except ModuleNotFoundError:
+            return False
+        return True
+
+    def __getattr__(self, name):
+        return getattr(self._load(), name)
+
+    def __bool__(self):
+        return self.is_available()
+
+
+class LazyOptionalAttribute:
+    def __init__(self, module, attr_name, package_name=None):
+        self.module = module
+        self.attr_name = attr_name
+        self.package_name = package_name or attr_name
+        self._attribute = None
+        self._missing = None
+
+    def _load(self):
+        if self._attribute is not None:
+            return self._attribute
+        if self._missing is not None:
+            self._missing._raise()
+
+        try:
+            self._attribute = getattr(self.module, self.attr_name)
+        except Exception as e:
+            OPTIONAL_DEPENDENCY_ERRORS[self.attr_name] = e
+            self._missing = MissingDependency(self.attr_name, self.package_name, e)
+            self._missing._raise()
+        return self._attribute
+
+    def is_available(self):
+        if self._attribute is not None:
+            return True
+        if self._missing is not None:
+            return False
+        try:
+            self._load()
+        except ModuleNotFoundError:
+            return False
+        return True
+
+    def __call__(self, *args, **kwargs):
+        return self._load()(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._load(), name)
+
+    def __bool__(self):
+        return self.is_available()
+
+
 def Optional_Import(import_name, package_name=None):
-    try:
-        return importlib.import_module(import_name)
-    except ModuleNotFoundError as e:
-        OPTIONAL_DEPENDENCY_ERRORS[import_name] = e
-        return MissingDependency(import_name, package_name, e)
+    return LazyOptionalModule(import_name, package_name)
 
 
 def Optional_Attribute(module, attr_name, package_name=None):
     if isinstance(module, MissingDependency):
         return MissingDependency(module.import_name, package_name or module.package_name, module.error)
-    try:
-        return getattr(module, attr_name)
-    except AttributeError as e:
-        return MissingDependency(attr_name, package_name or attr_name, e)
+    if isinstance(module, LazyOptionalModule):
+        return LazyOptionalAttribute(module, attr_name, package_name)
+    return LazyOptionalAttribute(module, attr_name, package_name)
 
 
 def Dependency_Available(module):
-    return not isinstance(module, MissingDependency)
+    if isinstance(module, MissingDependency):
+        return False
+    if isinstance(module, (LazyOptionalModule, LazyOptionalAttribute)):
+        return module.is_available()
+    return True
 
 
 g4f = Optional_Import("g4f")
@@ -361,10 +442,7 @@ Github = Optional_Attribute(github_module, "Github", "PyGithub")
 unidecode_module = Optional_Import("unidecode", "Unidecode")
 unidecode = Optional_Attribute(unidecode_module, "unidecode", "Unidecode")
 
-if Dependency_Available(g4f):
-    g4f_debug = Optional_Import("g4f.debug", "g4f")
-    if Dependency_Available(g4f_debug):
-        g4f.debug.logging = True
+g4f_debug = Optional_Import("g4f.debug", "g4f")
 
 
 @contextmanager
@@ -679,12 +757,33 @@ def To_Gpt(input):
     if openai_response:
         return Text_To_Speech(str(openai_response), stayawake=False)
 
-    if GPT4FREE_SERVERS_STATUS and globals().get("Providers_To_Use"):
+    if GPT4FREE_SERVERS_STATUS and Ensure_Gpt4free_Providers():
         return FreeGpt(input, check_history=False, save_last_sentence=False)
 
     print("\n-Trinitty:Error no OpenAI response and no gpt4free fallback provider available.")
     Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_respons_allprovider.wav")
     return Go_Back_To_Sleep(False)
+
+
+def Ensure_Gpt4free_Providers():
+    global Providers_To_Use
+
+    if Providers_To_Use:
+        return Providers_To_Use
+    if GPT4FREE_SERVERS_LIST:
+        Providers_To_Use = GPT4FREE_SERVERS_LIST
+    elif GPT4FREE_SERVERS_STATUS:
+        Refresh_Gpt4free_Providers_Config()
+        GetConf()
+        if GPT4FREE_SERVERS_LIST:
+            Providers_To_Use = GPT4FREE_SERVERS_LIST
+        elif GPT4FREE_SERVERS_STATUS:
+            Providers_To_Use = Check_Free_Servers()
+        else:
+            Providers_To_Use = []
+    else:
+        Providers_To_Use = []
+    return Providers_To_Use
 
 
 def Openai_Config_Bool(value, default=False):
@@ -7753,12 +7852,9 @@ if __name__ == "__main__":
 
     Initialize_User_Data()
     Configure_Default_Google_Credentials()
-    Refresh_Gpt4free_Providers_Config()
     GetConf()
 
 
-    if GPT4FREE_SERVERS_STATUS and not GPT4FREE_SERVERS_LIST:
-        Providers_To_Use = Check_Free_Servers()
     if GPT4FREE_SERVERS_LIST:
        Providers_To_Use = GPT4FREE_SERVERS_LIST
 
