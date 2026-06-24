@@ -47,6 +47,30 @@ Le lanceur est créé dans `~/.local/bin/trinitty`. Il active automatiquement l'
 trinitty
 ```
 
+### Installation conseillée sur Raspberry Pi
+
+Sur Raspberry Pi, il est préférable d'utiliser un virtualenv dédié pour éviter les conflits avec les paquets Python installés globalement ou dans `~/.local`.
+
+```bash
+sudo apt-get install -y python3-venv python3-pyaudio alsa-utils sox
+
+rm -rf ~/venvs/trinitty
+python3 -m venv --system-site-packages ~/venvs/trinitty
+
+~/venvs/trinitty/bin/python -m pip install -U pip setuptools wheel
+PYTHONNOUSERSITE=1 ~/venvs/trinitty/bin/python -m pip install --no-cache-dir -U trinitty
+
+PYTHONNOUSERSITE=1 ~/venvs/trinitty/bin/trinitty --install-launcher
+```
+
+Après cette installation, l'utilisation normale reste:
+
+```bash
+trinitty
+```
+
+Le lanceur `~/.local/bin/trinitty` force automatiquement l'environnement propre nécessaire. Il utilise le Python du virtualenv, active `PYTHONNOUSERSITE=1` et vide `PYTHONPATH`.
+
 ## Installation depuis le dépôt
 
 Depuis un checkout local, l'installateur crée ou réutilise un virtualenv, installe les dépendances Python, télécharge les données NLTK, installe le modèle spaCy français et peut installer les paquets système avec `--system`.
@@ -127,6 +151,65 @@ OpenAI reste le chemin principal. `gpt4free` sert de secours:
 - si OpenAI est désactivé avec `OPENAI_ENABLED = False`.
 
 Certains providers nécessitent des cookies ou des jetons. Les captures locales peuvent être placées dans `tools/har_and_cookies/`
+
+## Dépannage
+
+### La commande `trinitty` n'est pas trouvée
+
+Vérifier que `~/.local/bin` est dans le `PATH`:
+
+```bash
+echo "$PATH"
+```
+
+Si le dossier manque, l'ajouter dans `~/.bashrc`:
+
+```bash
+printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Le lanceur peut être recréé avec:
+
+```bash
+~/venvs/trinitty/bin/trinitty --install-launcher
+```
+
+### Segmentation fault avec `gpt4free`
+
+Si `g4f` plante à l'import, Trinitty désactive le fallback `gpt4free` au lieu de faire tomber le programme principal. Pour vérifier l'état de `g4f` dans le virtualenv:
+
+```bash
+source ~/venvs/trinitty/bin/activate
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
+
+python -X faulthandler -c "import g4f; print('g4f import OK')"
+python -X faulthandler -c "import g4f.cookies; print('g4f cookies OK')"
+```
+
+Si ces commandes échouent, recréer un environnement propre:
+
+```bash
+rm -rf ~/venvs/trinitty
+python3 -m venv --system-site-packages ~/venvs/trinitty
+~/venvs/trinitty/bin/python -m pip install -U pip setuptools wheel
+PYTHONNOUSERSITE=1 ~/venvs/trinitty/bin/python -m pip install --no-cache-dir -U trinitty
+PYTHONNOUSERSITE=1 ~/venvs/trinitty/bin/trinitty --install-launcher
+```
+
+### Trouver les fichiers utilisés
+
+Afficher le module installé, les assets du package et le dossier utilisateur:
+
+```bash
+~/venvs/trinitty/bin/python - <<'PY'
+import trinitty
+print("module :", trinitty.__file__)
+print("configuration package :", trinitty.Packaged_Config_File())
+print("dossier utilisateur :", trinitty.User_Data_Root())
+PY
+```
 
 ## Fichiers de configuration
 
