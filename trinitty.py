@@ -1113,6 +1113,24 @@ def ignoreStderr():
         os.close(old_stderr)
 
 
+def Configure_Vosk_Log_Level():
+    if not Dependency_Available(vosk) or not hasattr(vosk, "SetLogLevel"):
+        return
+    log_level = 0 if globals().get("DEBUG", False) else -1
+    try:
+        vosk.SetLogLevel(log_level)
+    except Exception as e:
+        PRINT("\n-Trinitty:Configure_Vosk_Log_Level:%s" % str(e))
+
+
+def Vosk_Call(callback, *args):
+    Configure_Vosk_Log_Level()
+    if globals().get("DEBUG", False):
+        return callback(*args)
+    with ignoreStderr():
+        return callback(*args)
+
+
 def Configure_Default_Google_Credentials():
     env_name = "GOOGLE_APPLICATION_CREDENTIALS"
     credential_candidates = [
@@ -1384,7 +1402,7 @@ def Get_Vosk_Model():
     model_path = Existing_Runtime_Model_Path(globals().get("STT_LOCAL_MODEL_PATH", ""))
     if not model_path:
         raise RuntimeError("modele Vosk introuvable: %s" % globals().get("STT_LOCAL_MODEL_PATH", ""))
-    VOSK_MODEL = vosk.Model(model_path)
+    VOSK_MODEL = Vosk_Call(vosk.Model, model_path)
     return VOSK_MODEL
 
 
@@ -1392,7 +1410,7 @@ def Local_STT_Fallback(audio):
     if not Config_Bool(globals().get("STT_LOCAL_FALLBACK_ENABLED", False), default=False):
         return ("", 0, [], [], "")
     try:
-        recognizer = vosk.KaldiRecognizer(Get_Vosk_Model(), 16000)
+        recognizer = Vosk_Call(vosk.KaldiRecognizer, Get_Vosk_Model(), 16000)
         recognizer.AcceptWaveform(audio)
         payload = recognizer.Result() or recognizer.FinalResult()
         data = json.loads(payload or "{}")
@@ -1513,6 +1531,8 @@ PLAYBACK_INTERRUPT_ENABLED = False
 PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
 PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+PLAYBACK_INTERRUPT_JOIN_TIMEOUT = 2.0
+PLAYBACK_INTERRUPT_RELEASE_DELAY = 0.2
 PLAYBACK_INTERRUPT_LOCAL_STT_WARNINGS = set()
 COMMAND_CLASSIFIER_ENABLED = False
 COMMAND_CLASSIFIER_THRESHOLD = 0.65
@@ -2228,6 +2248,8 @@ def Check_Free_Servers():
 def Filter_Gpt4free_Providers_For_Runtime(providers):
     if not providers:
         return []
+    if not Ensure_Gpt4free_Runtime_Available():
+        return []
 
     filtered = list(providers)
     if GPT4FREE_SERVERS_STATUS == "All":
@@ -2421,6 +2443,9 @@ def Gpt4free_Provider_Has_Auth(provider):
 
 
 def Resolve_Gpt4free_Provider(provider_name):
+    if not Ensure_Gpt4free_Runtime_Available():
+        raise RuntimeError("gpt4free runtime unavailable")
+
     provider_name = str(provider_name or "").strip()
     prefix = "g4f.Provider."
     if not provider_name.startswith(prefix):
@@ -7890,7 +7915,7 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
             )
             return None
 
-        recognizer = vosk.KaldiRecognizer(model, 16000, grammar)
+        recognizer = Vosk_Call(vosk.KaldiRecognizer, model, 16000, grammar)
         with ignoreStderr():
             pa = pyaudio.PyAudio()
         audio_stream = pa.open(
@@ -7991,7 +8016,17 @@ def Stop_Playback_Interrupt_Listener(listener_info):
     stop_event, listener = listener_info
     stop_event.set()
     Stop_Recording()
-    listener.join(timeout=0.2)
+    join_timeout = Config_Positive_Float(globals().get("PLAYBACK_INTERRUPT_JOIN_TIMEOUT", 2.0), 2.0)
+    listener.join(timeout=join_timeout)
+    if listener.is_alive():
+        Log_Error("Stop_Playback_Interrupt_Listener", "listener still alive after %.2fs" % join_timeout)
+        PRINT("\n-Trinitty:Stop_Playback_Interrupt_Listener:listener still alive")
+    Queue_Drain(cancel_operation)
+    Queue_Drain(audio_datas)
+    Queue_Drain(No_Input)
+    release_delay = Config_Positive_Float(globals().get("PLAYBACK_INTERRUPT_RELEASE_DELAY", 0.2), 0.2)
+    if release_delay > 0:
+        time.sleep(release_delay)
 
 
 def Run_Playback_Command(command, cancel_event=None):
@@ -10634,6 +10669,8 @@ if __name__ == "__main__":
     PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
     PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
     PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+    PLAYBACK_INTERRUPT_JOIN_TIMEOUT = 2.0
+    PLAYBACK_INTERRUPT_RELEASE_DELAY = 0.2
     PLAYBACK_INTERRUPT_LOCAL_STT_WARNINGS = set()
     WAIT_FOR_TIMEOUT = 30.0
     WAIT_FOR_POLL_INTERVAL = 0.05

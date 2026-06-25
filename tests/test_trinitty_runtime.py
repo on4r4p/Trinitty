@@ -1301,8 +1301,10 @@ class TrinittyRuntimeTests(unittest.TestCase):
     def test_runtime_gpt4free_filter_removes_nonworking_without_prompt(self):
         original_status = getattr(trinitty, "GPT4FREE_SERVERS_STATUS", "Active")
         original_working = trinitty.Gpt4free_Provider_Working
+        original_runtime_available = getattr(trinitty, "GPT4FREE_RUNTIME_AVAILABLE", None)
         try:
             trinitty.GPT4FREE_SERVERS_STATUS = "Active"
+            trinitty.GPT4FREE_RUNTIME_AVAILABLE = True
             trinitty.Gpt4free_Provider_Working = lambda provider: provider.endswith(".Good")
 
             self.assertEqual(
@@ -1313,6 +1315,20 @@ class TrinittyRuntimeTests(unittest.TestCase):
             )
         finally:
             trinitty.GPT4FREE_SERVERS_STATUS = original_status
+            trinitty.Gpt4free_Provider_Working = original_working
+            trinitty.GPT4FREE_RUNTIME_AVAILABLE = original_runtime_available
+
+    def test_runtime_gpt4free_filter_skips_resolution_when_runtime_unavailable(self):
+        original_runtime_available = getattr(trinitty, "GPT4FREE_RUNTIME_AVAILABLE", None)
+        original_working = trinitty.Gpt4free_Provider_Working
+        try:
+            trinitty.GPT4FREE_RUNTIME_AVAILABLE = False
+            trinitty.Gpt4free_Provider_Working = lambda _provider: (_ for _ in ()).throw(
+                AssertionError("provider resolution must not run")
+            )
+            self.assertEqual([], trinitty.Filter_Gpt4free_Providers_For_Runtime(["g4f.Provider.Qwen"]))
+        finally:
+            trinitty.GPT4FREE_RUNTIME_AVAILABLE = original_runtime_available
             trinitty.Gpt4free_Provider_Working = original_working
 
     def test_result_text_extracts_readable_fields(self):
@@ -2094,6 +2110,40 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertIn("module vosk absent", output.getvalue())
 
+    def test_vosk_call_sets_log_level_from_debug(self):
+        reset_command_state()
+        calls = []
+        original_vosk = trinitty.vosk
+        original_debug = trinitty.DEBUG
+
+        class FakeVosk:
+            def SetLogLevel(self, level):
+                calls.append(("level", level))
+
+            def Model(self, path):
+                calls.append(("model", path))
+                return "model"
+
+        trinitty.vosk = FakeVosk()
+        try:
+            trinitty.DEBUG = False
+            self.assertEqual("model", trinitty.Vosk_Call(trinitty.vosk.Model, "/tmp/model"))
+            trinitty.DEBUG = True
+            self.assertEqual("model", trinitty.Vosk_Call(trinitty.vosk.Model, "/tmp/model"))
+        finally:
+            trinitty.vosk = original_vosk
+            trinitty.DEBUG = original_debug
+
+        self.assertEqual(
+            [
+                ("level", -1),
+                ("model", "/tmp/model"),
+                ("level", 0),
+                ("model", "/tmp/model"),
+            ],
+            calls,
+        )
+
     def test_playback_interrupt_listener_is_disabled_by_default(self):
         reset_command_state()
         reset_runtime_queues()
@@ -2144,6 +2194,39 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertEqual(("play", audio_wav, event), calls[0])
         self.assertEqual(("stop", listener), calls[1])
+
+    def test_stop_playback_interrupt_listener_waits_and_cleans_queues(self):
+        reset_command_state()
+        reset_runtime_queues()
+        calls = []
+        stop_event = trinitty.Event()
+        trinitty.cancel_operation.put(True)
+        trinitty.audio_datas.put(b"old-audio")
+        trinitty.No_Input.put(True)
+
+        class FakeListener:
+            def join(self, timeout=None):
+                calls.append(("join", timeout))
+
+            def is_alive(self):
+                return False
+
+        original_stop_recording = trinitty.Stop_Recording
+        original_sleep = trinitty.time.sleep
+        trinitty.Stop_Recording = lambda: calls.append("stop-recording")
+        trinitty.time.sleep = lambda seconds: calls.append(("sleep", seconds))
+        try:
+            trinitty.Stop_Playback_Interrupt_Listener((stop_event, FakeListener()))
+        finally:
+            trinitty.Stop_Recording = original_stop_recording
+            trinitty.time.sleep = original_sleep
+
+        self.assertTrue(stop_event.is_set())
+        self.assertIn(("join", 2.0), calls)
+        self.assertIn(("sleep", 0.2), calls)
+        self.assertTrue(trinitty.cancel_operation.empty())
+        self.assertTrue(trinitty.audio_datas.empty())
+        self.assertTrue(trinitty.No_Input.empty())
 
     def test_repeat_response_forces_interrupt_listener_for_last_answer(self):
         reset_command_state()
