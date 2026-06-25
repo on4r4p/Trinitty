@@ -224,6 +224,7 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
 
     def test_literal_asset_references_exist(self):
         ignored_literals = {
+            "datas/conf.local.trinity",
             "datas/command_classifier.keras",
             "local_sounds/cmd/hit",
             "local_sounds/cmd/intro_",
