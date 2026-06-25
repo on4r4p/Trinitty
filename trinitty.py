@@ -443,27 +443,59 @@ def Install_Dependencies_Script_Path():
     return ""
 
 
+def Files_Differ(source, destination):
+    try:
+        with open(source, "rb") as src, open(destination, "rb") as dst:
+            return src.read() != dst.read()
+    except OSError:
+        return True
+
+
+def Copy_Installer_File(source, destination, mode):
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    copy2(source, destination)
+    try:
+        os.chmod(destination, mode)
+    except OSError:
+        pass
+
+
+def Is_Managed_Trinitty_Installer(filepath):
+    try:
+        with open(filepath, encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except OSError:
+        return False
+    return (
+        text.startswith("#!/usr/bin/env bash")
+        and "ROOT_DIR=" in text
+        and "install_user_launcher()" in text
+        and "Dependency installation finished." in text
+    )
+
+
 def Initialize_User_Installer(root=None):
     root = root or User_Data_Root()
     copied = []
     files = [
-        ("install_dependencies.sh", Install_Dependencies_User_Path(root), 0o700),
-        ("requirements.txt", Install_Dependencies_Requirements_User_Path(root), 0o600),
+        ("install_dependencies.sh", Install_Dependencies_User_Path(root), 0o700, True),
+        ("requirements.txt", Install_Dependencies_Requirements_User_Path(root), 0o600, False),
     ]
 
-    for filename, destination, mode in files:
-        if os.path.exists(destination):
-            continue
-
+    for filename, destination, mode, refresh_managed_file in files:
         for source in dict.fromkeys(Install_Dependencies_Source_Candidates(filename)):
             if os.path.isfile(source) and os.path.abspath(source) != os.path.abspath(destination):
-                os.makedirs(os.path.dirname(destination), exist_ok=True)
-                copy2(source, destination)
-                try:
-                    os.chmod(destination, mode)
-                except OSError:
-                    pass
-                copied.append(destination)
+                should_copy = not os.path.exists(destination)
+                if (
+                    not should_copy
+                    and refresh_managed_file
+                    and Is_Managed_Trinitty_Installer(destination)
+                    and Files_Differ(source, destination)
+                ):
+                    should_copy = True
+                if should_copy:
+                    Copy_Installer_File(source, destination, mode)
+                    copied.append(destination)
                 break
 
     return copied

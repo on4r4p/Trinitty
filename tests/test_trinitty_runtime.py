@@ -248,6 +248,42 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 else:
                     os.environ["HOME"] = original_home
 
+    def test_initialize_user_installer_refreshes_stale_managed_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "user"
+            source_dir = Path(tmp) / "package"
+            root.mkdir()
+            source_dir.mkdir()
+            user_installer = root / "install_dependencies.sh"
+            user_installer.write_text(
+                "#!/usr/bin/env bash\n"
+                "ROOT_DIR=old\n"
+                "install_user_launcher() { :; }\n"
+                "echo 'Dependency installation finished.'\n"
+            )
+            user_installer.chmod(0o600)
+            package_installer = source_dir / "install_dependencies.sh"
+            package_installer.write_text(
+                "#!/usr/bin/env bash\n"
+                "ROOT_DIR=new\n"
+                "install_user_launcher() { :; }\n"
+                "# --with-local-stt\n"
+                "echo 'Dependency installation finished.'\n"
+            )
+
+            original_candidates = trinitty.Install_Dependencies_Source_Candidates
+            try:
+                trinitty.Install_Dependencies_Source_Candidates = lambda filename="install_dependencies.sh": [
+                    str(source_dir / filename)
+                ]
+                copied = trinitty.Initialize_User_Installer(str(root))
+            finally:
+                trinitty.Install_Dependencies_Source_Candidates = original_candidates
+
+            self.assertEqual([str(user_installer)], copied)
+            self.assertIn("--with-local-stt", user_installer.read_text())
+            self.assertTrue(os.access(user_installer, os.X_OK))
+
     def test_install_user_launcher_writes_clean_environment_wrapper(self):
         with tempfile.TemporaryDirectory() as tmp:
             launcher_path = Path(tmp) / "bin" / "trinitty"
