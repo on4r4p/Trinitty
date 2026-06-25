@@ -28,8 +28,9 @@ def reset_command_state():
     trinitty.PLAYBACK_INTERRUPT_ENABLED = False
     trinitty.PLAYBACK_INTERRUPT_TIMEOUT = 30.0
     trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous"
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
     trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_WARNINGS = set()
     trinitty.COMMAND_CLASSIFIER_ENABLED = False
     trinitty.COMMAND_CLASSIFIER_THRESHOLD = 0.65
     trinitty.COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"
@@ -623,10 +624,32 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertEqual("OPENAI_MODEL = old-user-model\n", legacy_conf.read_text())
 
     def test_dependency_help_uses_absolute_installer_path_when_available(self):
-        help_text = trinitty.Dependency_Install_Help("google-cloud-speech")
+        original_local_stt_enabled = trinitty.Playback_Interrupt_Local_STT_Config_Enabled
+        trinitty.Playback_Interrupt_Local_STT_Config_Enabled = lambda: False
+        try:
+            help_text = trinitty.Dependency_Install_Help("google-cloud-speech")
+        finally:
+            trinitty.Playback_Interrupt_Local_STT_Config_Enabled = original_local_stt_enabled
 
         self.assertIn(str(ROOT / "install_dependencies.sh"), help_text)
         self.assertIn("--system --venv", help_text)
+        self.assertNotIn("--with-local-stt", help_text)
+
+    def test_dependency_help_adds_local_stt_when_config_enabled(self):
+        original_home = os.environ.get("HOME")
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.environ["HOME"] = str(Path(tmp) / "home")
+                help_text = trinitty.Dependency_Install_Help("google-cloud-speech")
+            finally:
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+
+        self.assertIn(str(ROOT / "install_dependencies.sh"), help_text)
+        self.assertIn("--system --venv", help_text)
+        self.assertIn("--with-local-stt", help_text)
 
     def test_dependency_help_prefers_user_installer_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -637,8 +660,11 @@ class TrinittyRuntimeTests(unittest.TestCase):
             original_home = os.environ.get("HOME")
             try:
                 os.environ["HOME"] = str(home)
+                original_local_stt_enabled = trinitty.Playback_Interrupt_Local_STT_Config_Enabled
+                trinitty.Playback_Interrupt_Local_STT_Config_Enabled = lambda: False
                 help_text = trinitty.Dependency_Install_Help("google-cloud-speech")
             finally:
+                trinitty.Playback_Interrupt_Local_STT_Config_Enabled = original_local_stt_enabled
                 if original_home is None:
                     os.environ.pop("HOME", None)
                 else:
@@ -699,6 +725,24 @@ class TrinittyRuntimeTests(unittest.TestCase):
         original_auto_run = trinitty.Auto_Run_Dependency_Installer
         try:
             trinitty.sys.argv = ["trinitty", "--check-install"]
+            trinitty.Initialize_User_Data = lambda: "/tmp/trinitty-user"
+            trinitty.Auto_Run_Dependency_Installer = lambda root=None, force=False: calls.append((root, force)) or True
+
+            self.assertTrue(trinitty.Handle_Utility_Args())
+        finally:
+            trinitty.sys.argv = original_argv
+            trinitty.Initialize_User_Data = original_initialize
+            trinitty.Auto_Run_Dependency_Installer = original_auto_run
+
+        self.assertEqual([("/tmp/trinitty-user", True)], calls)
+
+    def test_checkinstall_alias_forces_dependency_installer(self):
+        calls = []
+        original_argv = trinitty.sys.argv
+        original_initialize = trinitty.Initialize_User_Data
+        original_auto_run = trinitty.Auto_Run_Dependency_Installer
+        try:
+            trinitty.sys.argv = ["trinitty", "--checkinstall"]
             trinitty.Initialize_User_Data = lambda: "/tmp/trinitty-user"
             trinitty.Auto_Run_Dependency_Installer = lambda root=None, force=False: calls.append((root, force)) or True
 
@@ -802,7 +846,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
             self.assertEqual(1, len(calls))
             self.assertEqual(
-                [str(installer), "--system", "--no-venv", "--no-dev-tools", "--no-launcher"],
+                [str(installer), "--system", "--no-venv", "--no-dev-tools", "--no-launcher", "--with-local-stt"],
                 calls[0][0],
             )
             self.assertEqual(str(root), calls[0][1])
@@ -1941,6 +1985,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertTrue(trinitty.Playback_Stop_Command_Detected("stop"))
         self.assertTrue(trinitty.Playback_Stop_Command_Detected("arrête"))
+        self.assertTrue(trinitty.Playback_Stop_Command_Detected("chute"))
         self.assertFalse(trinitty.Playback_Stop_Command_Detected("continue"))
 
     def test_playback_interrupt_local_stt_cancels_playback(self):
@@ -1997,6 +2042,21 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn('"arrête"', calls[0][3])
         self.assertIn("close", calls)
         self.assertIn("terminate", calls)
+
+    def test_playback_interrupt_local_stt_warns_when_vosk_missing(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+        original_vosk = trinitty.vosk
+        trinitty.vosk = trinitty.MissingDependency("vosk", "vosk", ModuleNotFoundError("missing"))
+        try:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertIsNone(trinitty.Playback_Interrupt_Local_STT_Listener(trinitty.Event(), timeout=0.01))
+        finally:
+            trinitty.vosk = original_vosk
+
+        self.assertIn("module vosk absent", output.getvalue())
 
     def test_playback_interrupt_listener_is_disabled_by_default(self):
         reset_command_state()

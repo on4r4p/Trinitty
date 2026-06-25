@@ -12,6 +12,7 @@ INSTALL_SYSTEM=0
 INSTALL_NLTK_DATA=1
 INSTALL_SPACY_MODEL=1
 INSTALL_COMMAND_CLASSIFIER=0
+INSTALL_LOCAL_STT=0
 INSTALL_DEV_TOOLS=1
 INSTALL_LAUNCHER=1
 VERIFY_IMPORTS=1
@@ -33,6 +34,8 @@ Options:
   --no-spacy-model       Skip the fr_core_news_md spaCy model download.
   --with-command-classifier
                          Install optional TensorFlow command-classifier dependencies.
+  --with-local-stt       Install Vosk and download the small French model used to
+                         interrupt playback with stop/arrête.
   --no-dev-tools         Skip packaging/lint tools: build, twine, ruff.
   --no-launcher          Do not install the user launcher in ~/.local/bin.
   --launcher-dir DIR     Install the user launcher in DIR. Default: ~/.local/bin
@@ -73,6 +76,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-command-classifier)
       INSTALL_COMMAND_CLASSIFIER=1
+      ;;
+    --with-local-stt)
+      INSTALL_LOCAL_STT=1
       ;;
     --no-dev-tools)
       INSTALL_DEV_TOOLS=0
@@ -351,6 +357,49 @@ EOF
   esac
 }
 
+install_local_stt() {
+  if [[ "$INSTALL_LOCAL_STT" -ne 1 ]]; then
+    return
+  fi
+
+  local model_name model_dir model_path model_url archive_path
+  model_name="vosk-model-small-fr-0.22"
+  model_dir="$ROOT_DIR/models"
+  model_path="$model_dir/$model_name"
+  model_url="https://alphacephei.com/vosk/models/$model_name.zip"
+  archive_path="$model_dir/$model_name.zip"
+
+  "$PYTHON_BIN" -m pip install "vosk>=0.3.45"
+
+  if [[ -d "$model_path" ]]; then
+    echo "Vosk French model already installed: $model_path"
+    return
+  fi
+
+  mkdir -p "$model_dir"
+  MODEL_URL="$model_url" ARCHIVE_PATH="$archive_path" MODEL_DIR="$model_dir" "$PYTHON_BIN" - <<'PY'
+import os
+import urllib.request
+import zipfile
+
+url = os.environ["MODEL_URL"]
+archive_path = os.environ["ARCHIVE_PATH"]
+model_dir = os.environ["MODEL_DIR"]
+
+print(f"Downloading Vosk French model: {url}")
+urllib.request.urlretrieve(url, archive_path)
+
+print(f"Extracting Vosk French model into: {model_dir}")
+with zipfile.ZipFile(archive_path) as archive:
+    archive.extractall(model_dir)
+
+try:
+    os.remove(archive_path)
+except OSError:
+    pass
+PY
+}
+
 if [[ "$INSTALL_SYSTEM" -eq 1 ]]; then
   install_system_dependencies
 fi
@@ -378,6 +427,8 @@ if [[ "$INSTALL_COMMAND_CLASSIFIER" -eq 1 ]]; then
   "$PYTHON_BIN" -m pip install "$ROOT_DIR[command-classifier]"
 fi
 
+install_local_stt
+
 if [[ "$INSTALL_NLTK_DATA" -eq 1 ]]; then
   "$PYTHON_BIN" - <<'PY'
 import nltk
@@ -402,11 +453,12 @@ if [[ "$INSTALL_SPACY_MODEL" -eq 1 ]]; then
 fi
 
 if [[ "$VERIFY_IMPORTS" -eq 1 ]]; then
-  TRINITTY_INSTALL_DEV_TOOLS="$INSTALL_DEV_TOOLS" "$PYTHON_BIN" - <<'PY'
+  TRINITTY_INSTALL_DEV_TOOLS="$INSTALL_DEV_TOOLS" TRINITTY_INSTALL_LOCAL_STT="$INSTALL_LOCAL_STT" TRINITTY_ROOT_DIR="$ROOT_DIR" "$PYTHON_BIN" - <<'PY'
 import importlib.util
 import os
 import shutil
 import sys
+from pathlib import Path
 
 modules = [
     "g4f",
@@ -430,6 +482,9 @@ modules = [
     "googlesearch",
     "wikipedia",
 ]
+
+if os.environ.get("TRINITTY_INSTALL_LOCAL_STT") == "1":
+    modules.append("vosk")
 
 if os.getenv("TRINITTY_INSTALL_DEV_TOOLS") == "1":
     modules.extend(["build", "twine", "ruff"])
@@ -466,6 +521,14 @@ except Exception as exc:
     missing.append("fr_core_news_md")
 else:
     print("fr_core_news_md: OK")
+
+if os.environ.get("TRINITTY_INSTALL_LOCAL_STT") == "1":
+    model_path = Path(os.environ["TRINITTY_ROOT_DIR"]) / "models" / "vosk-model-small-fr-0.22"
+    if model_path.is_dir():
+        print(f"vosk-model-small-fr-0.22: OK ({model_path})")
+    else:
+        print(f"vosk-model-small-fr-0.22: MISSING ({model_path})")
+        missing.append("vosk-model-small-fr-0.22")
 
 if missing:
     print("\nMissing dependencies:", ", ".join(missing), file=sys.stderr)

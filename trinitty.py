@@ -206,6 +206,7 @@ Usage terminal:
   trinitty                       Lance l'assistant vocal.
   trinitty -h, trinitty --help   Affiche cette aide.
   trinitty --check-install       Vérifie/installe les dépendances locales.
+  trinitty --checkinstall        Alias de --check-install.
   trinitty doctor                Vérifie l'installation sans rien modifier.
   trinitty doctor --fix          Prépare les fichiers utilisateur puis lance l'installateur.
   trinitty --list-commands       Affiche les commandes vocales connues.
@@ -345,6 +346,8 @@ def Explain_Command_Text(phrase):
 
 def Trinitty_Doctor(fix=False):
     root = Initialize_User_Data()
+    local_stt_enabled = Playback_Interrupt_Local_STT_Config_Enabled()
+    local_stt_model_path = Configured_STT_Local_Model_Path()
     checks = []
     checks.append(("dossier utilisateur", os.path.isdir(root), root))
     checks.append(("configuration utilisateur", os.path.isfile(User_Data_Path("datas", "conf.trinity")), User_Data_Path("datas", "conf.trinity")))
@@ -354,6 +357,8 @@ def Trinitty_Doctor(fix=False):
     checks.append(("Google credentials", bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")), "GOOGLE_APPLICATION_CREDENTIALS"))
     checks.append(("OpenAI key", bool(Openai_Load_Key()), Openai_Key_Source_For_Log()))
     checks.append(("g4f import", Ensure_Gpt4free_Runtime_Available(), "fallback gpt4free"))
+    checks.append(("Vosk import", (not local_stt_enabled) or Dependency_Available(vosk), "interruption stop/arrête locale"))
+    checks.append(("modèle Vosk", (not local_stt_enabled) or bool(Existing_Runtime_Model_Path(local_stt_model_path)), local_stt_model_path))
 
     print("Diagnostic Trinitty:")
     for label, ok, detail in checks:
@@ -382,7 +387,7 @@ def Handle_Utility_Args():
     if command == "--explain-command":
         print(Explain_Command_Text(" ".join(sys.argv[2:])))
         return True
-    if command == "--check-install":
+    if command in ("--check-install", "--checkinstall"):
         root = Initialize_User_Data()
         Auto_Run_Dependency_Installer(root, force=True)
         return True
@@ -478,8 +483,31 @@ def Dependency_Installer_Command(script_path=None, root=None):
     if not script_path:
         return []
     if Dependency_Installer_Is_User_Copy(script_path, root):
-        return [script_path, "--system", "--no-venv", "--no-dev-tools", "--no-launcher"]
-    return [script_path, "--system", "--venv"]
+        command = [script_path, "--system", "--no-venv", "--no-dev-tools", "--no-launcher"]
+    else:
+        command = [script_path, "--system", "--venv"]
+    if Playback_Interrupt_Local_STT_Config_Enabled():
+        command.append("--with-local-stt")
+    return command
+
+
+def Playback_Interrupt_Local_STT_Config_Enabled():
+    config = Read_Raw_Runtime_Config()
+    value = config.get(
+        "PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED",
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED", True),
+    )
+    return Config_Bool(value, default=True)
+
+
+def Configured_STT_Local_Model_Path():
+    config = Read_Raw_Runtime_Config()
+    return str(
+        config.get(
+            "STT_LOCAL_MODEL_PATH",
+            globals().get("STT_LOCAL_MODEL_PATH", "models/vosk-model-small-fr-0.22"),
+        )
+    ).strip()
 
 
 def Dependency_Installer_Stamp_Path(root=None):
@@ -1451,8 +1479,9 @@ PLAYBACK_POLL_INTERVAL = 0.05
 PLAYBACK_INTERRUPT_TIMEOUT = 30.0
 PLAYBACK_INTERRUPT_ENABLED = False
 PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
-PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous"
+PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+PLAYBACK_INTERRUPT_LOCAL_STT_WARNINGS = set()
 COMMAND_CLASSIFIER_ENABLED = False
 COMMAND_CLASSIFIER_THRESHOLD = 0.65
 COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"
@@ -7728,6 +7757,12 @@ def Playback_Stop_Command_Detected(text):
     if not text:
         return False
     normalized = Normalize_Help_Command_Text(text)
+    configured_stop_words = {
+        Normalize_Help_Command_Text(word)
+        for word in Playback_Interrupt_Config_List(
+            globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_WORDS", "")
+        )
+    }
     if normalized in {
         "stop",
         "stoppe",
@@ -7742,7 +7777,9 @@ def Playback_Stop_Command_Detected(text):
         "pause",
         "tais toi",
         "taisez vous",
-    }:
+        "chut",
+        "chute",
+    } or normalized in configured_stop_words:
         return True
     ambiguity = Check_Ambiguity(text, allowed_functions=["F_wait", "F_quit"])
     if not ambiguity:
@@ -7766,12 +7803,31 @@ def Playback_Interrupt_Local_STT_Text(payload, key="text"):
     return str(data.get(key) or "").strip()
 
 
+def Playback_Interrupt_Local_STT_Warn(key, message):
+    warnings = globals().setdefault("PLAYBACK_INTERRUPT_LOCAL_STT_WARNINGS", set())
+    if key in warnings:
+        return
+    warnings.add(key)
+    print("\n-Trinitty:Interruption vocale locale indisponible:%s" % message)
+    Log_Error("Playback_Interrupt_Local_STT", message)
+
+
 def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
-    if (
-        not Config_Bool(globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED", True), default=True)
-        or not Dependency_Available(vosk)
-        or not Dependency_Available(pyaudio)
-    ):
+    if not Config_Bool(globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED", True), default=True):
+        return None
+
+    if not Dependency_Available(vosk):
+        Playback_Interrupt_Local_STT_Warn(
+            "missing-vosk",
+            " module vosk absent. Lancez `trinitty --check-install` avec PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED=True.",
+        )
+        return None
+
+    if not Dependency_Available(pyaudio):
+        Playback_Interrupt_Local_STT_Warn(
+            "missing-pyaudio",
+            " module pyaudio absent. Lancez `trinitty --check-install`.",
+        )
         return None
 
     words = Playback_Interrupt_Config_List(globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_WORDS", ""))
@@ -7793,7 +7849,16 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
     audio_stream = None
     pa = None
     try:
-        recognizer = vosk.KaldiRecognizer(Get_Vosk_Model(), 16000, grammar)
+        try:
+            model = Get_Vosk_Model()
+        except Exception as e:
+            Playback_Interrupt_Local_STT_Warn(
+                "missing-model",
+                " modèle Vosk introuvable (%s). Lancez `trinitty --check-install`." % str(e),
+            )
+            return None
+
+        recognizer = vosk.KaldiRecognizer(model, 16000, grammar)
         with ignoreStderr():
             pa = pyaudio.PyAudio()
         audio_stream = pa.open(
@@ -7823,7 +7888,7 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
         return False
     except Exception as e:
         Log_Error("Playback_Interrupt_Local_STT_Listener", e)
-        PRINT("\n-Trinitty:Playback_Interrupt_Local_STT_Listener:Error:%s" % str(e))
+        Playback_Interrupt_Local_STT_Warn("runtime-error", str(e))
         return None
     finally:
         if audio_stream is not None:
@@ -10321,7 +10386,7 @@ PUSH_TO_TALK = False # True: appuyer sur Entrée au lieu du wake word.
 PLAYBACK_INTERRUPT_ENABLED = False # True: écoute les commandes stop/arrête pendant la lecture.
 PLAYBACK_INTERRUPT_TIMEOUT = 30 # Durée maximale d'écoute pendant une lecture.
 PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True # True: utilise Vosk local pour détecter stop/arrête pendant la lecture si un modèle est disponible.
-PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête,pause,tais toi,taisez vous # Mots/phrases d'arrêt séparés par virgule.
+PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute # Mots/phrases d'arrêt séparés par virgule.
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25 # Taille des petits blocs audio analysés par Vosk.
 COMMAND_CLASSIFIER_ENABLED = False # True: utiliser le classifieur TensorFlow optionnel.
 COMMAND_CLASSIFIER_THRESHOLD = 0.65 # Score minimal du classifieur pour accepter une commande.
@@ -10534,6 +10599,10 @@ if __name__ == "__main__":
     PUSH_TO_TALK = False
     PLAYBACK_INTERRUPT_ENABLED = False
     PLAYBACK_INTERRUPT_TIMEOUT = 30.0
+    PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
+    PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
+    PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+    PLAYBACK_INTERRUPT_LOCAL_STT_WARNINGS = set()
     WAIT_FOR_TIMEOUT = 30.0
     WAIT_FOR_POLL_INTERVAL = 0.05
     PLAYBACK_POLL_INTERVAL = 0.05
