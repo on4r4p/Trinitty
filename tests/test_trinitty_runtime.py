@@ -1,3 +1,4 @@
+import builtins
 import importlib.util
 import contextlib
 import io
@@ -896,6 +897,32 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Show_History = original_show_history
 
         self.assertEqual(["show-history"], calls)
+
+    def test_prompt_empty_input_reports_no_input_and_returns_to_sleep(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.SCRIPT_PATH = str(ROOT)
+        calls = []
+        original_input = builtins.input
+        original_play = trinitty.Play_Audio_File
+        original_sleep = trinitty.Go_Back_To_Sleep
+        original_randint = trinitty.Non_Crypto_Randint
+        builtins.input = lambda _prompt=None: ""
+        trinitty.Play_Audio_File = lambda path: calls.append(("play", path)) or 0
+        trinitty.Go_Back_To_Sleep = lambda go_trinitty=True: calls.append(("sleep", go_trinitty)) or "sleep"
+        trinitty.Non_Crypto_Randint = lambda _start, _end: 1
+        try:
+            self.assertEqual("sleep", trinitty.Prompt())
+        finally:
+            builtins.input = original_input
+            trinitty.Play_Audio_File = original_play
+            trinitty.Go_Back_To_Sleep = original_sleep
+            trinitty.Non_Crypto_Randint = original_randint
+
+        self.assertIn(("play", str(ROOT / "local_sounds" / "prompt" / "2.wav")), calls)
+        self.assertIn(("play", str(ROOT / "local_sounds" / "noinput" / "1.wav")), calls)
+        self.assertIn(("sleep", True), calls)
+        self.assertFalse(trinitty.No_Input.empty())
 
     def test_load_csv_routes_common_spoken_show_history_requests(self):
         reset_command_state()
@@ -1954,6 +1981,58 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Play_Audio_File = original_play
 
         self.assertIn("&sort=date&start=1", calls[0])
+
+    def test_clean_web_search_query_removes_google_command_noise(self):
+        reset_command_state()
+        self.assertEqual(
+            "albert einstein",
+            trinitty.Clean_Web_Search_Query("fais une recherche sur google sur albert einstein"),
+        )
+
+    def test_google_uses_clean_query_and_fallback_when_custom_search_empty(self):
+        reset_command_state()
+        class Response:
+            status_code = 200
+
+            def json(self):
+                return {"items": []}
+
+        class Result:
+            title = "Albert Einstein"
+            description = "Physicien"
+            url = "https://example.invalid/einstein"
+
+        calls = []
+        original_key = getattr(trinitty, "GOOGLE_KEY", "")
+        original_engine = getattr(trinitty, "GOOGLE_ENGINE", "")
+        original_isolate = trinitty.Isolate_Search
+        original_get = trinitty.requests.get
+        original_search = trinitty.googlesearch.search
+        original_results_hub = trinitty.Results_Hub
+        original_play = trinitty.Play_Audio_File
+        trinitty.GOOGLE_KEY = "key"
+        trinitty.GOOGLE_ENGINE = "engine"
+        trinitty.Isolate_Search = lambda _text, _function_name: "une recherche sur google sur albert einstein"
+        trinitty.requests.get = lambda url, timeout=None: calls.append(("custom", url)) or Response()
+        trinitty.googlesearch.search = lambda query, **_kwargs: calls.append(("fallback", query)) or [Result()]
+        trinitty.Results_Hub = lambda results, top_results, from_function=None: calls.append(
+            ("hub", results, top_results, from_function)
+        ) or "results"
+        trinitty.Play_Audio_File = lambda *_args, **_kwargs: 0
+        try:
+            self.assertEqual("results", trinitty.Google("cherche test", rnbr=1))
+        finally:
+            trinitty.GOOGLE_KEY = original_key
+            trinitty.GOOGLE_ENGINE = original_engine
+            trinitty.Isolate_Search = original_isolate
+            trinitty.requests.get = original_get
+            trinitty.googlesearch.search = original_search
+            trinitty.Results_Hub = original_results_hub
+            trinitty.Play_Audio_File = original_play
+
+        self.assertIn(("fallback", "albert einstein"), calls)
+        self.assertIn("q=albert+einstein", calls[0][1])
+        self.assertEqual("Google", calls[-1][3])
 
     def test_clean_wikipedia_search_query_removes_command_noise(self):
         reset_command_state()

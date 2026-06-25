@@ -5211,6 +5211,41 @@ def Clean_Wikipedia_Search_Query(txt):
     return query or original
 
 
+def Clean_Web_Search_Query(txt):
+    original = str(txt or "").strip()
+    query = unidecode(original).lower()
+    query = query.replace("’", "'")
+
+    patterns = [
+        r"\bs\s*'?\s*il\s+(te|vous)\s+pla[iî]t\b",
+        r"\b(stp|svp|merci)\b",
+        r"\best[\s-]*ce\s+que\b",
+        r"\btu\s+peux\b",
+        r"\bpouvez\s+vous\b",
+        r"\bpeux\s+tu\b",
+        r"\bfais\s+(moi\s+)?une\s+recherche\b",
+        r"\bfaire\s+(moi\s+)?une\s+recherche\b",
+        r"\bune\s+recherche\b",
+        r"\bfaire\s+des\s+recherches\b",
+        r"\brecherche(?:r|s)?\b",
+        r"\bcherche(?:r|s)?\b",
+        r"\btrouve(?:r|s)?\b",
+        r"\bregarde(?:r|s)?\b",
+        r"\b(google|internet|web|wikipedia|wikipédia)\b",
+    ]
+    for pattern in patterns:
+        query = re.sub(pattern, " ", query)
+
+    query = re.sub(r"[^0-9a-zA-ZÀ-ÿ]+", " ", query)
+    query = re.sub(
+        r"\b(sur|dans|avec|a|au|aux|de|des|du|d|la|le|les|l|un|une|s)\b",
+        " ",
+        query,
+    )
+    query = re.sub(r"\s+", " ", query).strip()
+    return query or original
+
+
 def Google_Result_Item(title=None, description=None, url=None):
     title = str(title or "Sans titre").strip()
     description = str(description or "no description").strip()
@@ -5332,7 +5367,7 @@ def Google(to_search, rnbr=50,wiki_failed=False):  # ,tstmode = True):
     SearchFallback = False
     google_result = []
 
-    to_search = Isolate_Search(to_search,"F_search_web")
+    to_search = Clean_Web_Search_Query(Isolate_Search(to_search,"F_search_web"))
 
     PRINT("\n-Trinitty:Google():to_search:%s"%to_search)
     PRINT("\n-Trinitty:Google():wiki_failed:%s"%wiki_failed)
@@ -5385,9 +5420,7 @@ def Google(to_search, rnbr=50,wiki_failed=False):  # ,tstmode = True):
 
         if len(google_result) == 0:
             PRINT("\n-Trinitty:-Google() no result from google")
-            if not SearchFallback:
-                Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_result_google.wav")
-                return ()
+            SearchFallback = True
 
     if (len(GOOGLE_KEY) == 0 and len(GOOGLE_ENGINE) == 0) or SearchFallback:
 
@@ -5622,7 +5655,7 @@ def Prompt(allowed_functions=None,from_function=None):
     if from_function == "Results_Hub":
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/question/search_history_cmds.wav")
     Play_Audio_File(SCRIPT_PATH + "/local_sounds/prompt/2.wav")
-    user_input = input("\n-Trinitty:Comment puis-je vous aider ?:")
+    user_input = input("\n-Trinitty:Comment puis-je vous aider ?:").strip()
     if len(str(user_input)) > 2:
 
         cmd = Commandes(user_input,allowed_functions=allowed_functions,from_function=from_function)
@@ -5641,7 +5674,14 @@ def Prompt(allowed_functions=None,from_function=None):
             return(cmd)
         Go_Back_To_Sleep()
         return None
-    return None
+
+    PRINT("\n-Trinitty:Prompt():pas d'input")
+    No_Input.put(True)
+    rnd = str(Non_Crypto_Randint(1, 11))
+    Play_Audio_File(SCRIPT_PATH + "/local_sounds/noinput/" + rnd + ".wav")
+    if from_function == "Results_Hub":
+        return ("no cmd", user_input)
+    return Go_Back_To_Sleep()
 
 
 def Simulate_Conversation(user_inputs, responder=None, execute_commands=False):
