@@ -20,7 +20,7 @@ import sys
 import time
 import traceback
 import unicodedata
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import urlopen
 
 from difflib import SequenceMatcher
@@ -5092,6 +5092,130 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
     return False
 
 
+SEARCH_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64; rv:126.0) "
+        "Gecko/20100101 Firefox/126.0"
+    )
+}
+
+
+def Search_Result_Url_Is_Usable(url):
+    url = str(url or "").strip()
+    if not url:
+        return False
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    path = parsed.path.lower()
+    query = parsed.query.lower()
+    if host.endswith("duckduckgo.com"):
+        return False
+    if host.endswith("google.com") and path in ("/search", "/url", "/preferences"):
+        return False
+    if path.endswith("/aclick") or "ad_domain=" in query or "ad_type=" in query:
+        return False
+    return True
+
+
+def Decode_Search_Result_Url(url):
+    raw_url = str(url or "").strip()
+    if not raw_url:
+        return ""
+    if raw_url.startswith("//"):
+        raw_url = "https:%s" % raw_url
+
+    parsed = urlparse(raw_url)
+    if parsed.netloc.endswith("duckduckgo.com"):
+        if parsed.path.startswith("/l/"):
+            target = parse_qs(parsed.query).get("uddg", [""])[0]
+            target = unquote(target).strip()
+            return target if Search_Result_Url_Is_Usable(target) else ""
+        return ""
+    if parsed.netloc.endswith("google.com") and parsed.path == "/url":
+        target = parse_qs(parsed.query).get("q", [""])[0]
+        target = unquote(target).strip()
+        return target if Search_Result_Url_Is_Usable(target) else ""
+    return raw_url if Search_Result_Url_Is_Usable(raw_url) else ""
+
+
+def Search_Result_Matches_Site(url, site=None):
+    if not site:
+        return True
+    url = str(url or "").lower()
+    site = str(site or "").lower()
+    if site == "wikipedia":
+        return "wikipedia.org" in url
+    return site in url
+
+
+def Googlesearch_Module_Search(to_search, rnbr=10, site=None):
+    results = []
+    google_query = googlesearch.search(to_search, num_results=rnbr, lang="fr", advanced=True)
+    for result in google_query:
+        if isinstance(result, str):
+            title = result
+            description = ""
+            url = result
+        else:
+            title = getattr(result, "title", "")
+            description = getattr(result, "description", "")
+            url = getattr(result, "url", "")
+        url = Decode_Search_Result_Url(url)
+        if not title or not url or not Search_Result_Matches_Site(url, site):
+            continue
+        PRINT("\n-Trinitty:google_result:", title)
+        results.append(Google_Result_Item(title, description, url))
+        if len(results) >= rnbr:
+            break
+    return results
+
+
+def Fallback_Web_Search(to_search, rnbr=10, site=None):
+    PRINT("\n-Trinitty:Using fallback web search.")
+    results = []
+    try:
+        response = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": to_search},
+            headers=SEARCH_HTTP_HEADERS,
+            timeout=10,
+        )
+        if response.status_code != 200:
+            PRINT("\n-Trinitty:Fallback web search status:%s" % response.status_code)
+            return results
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        seen_urls = set()
+        for link in soup.select("a.result__a, a.result-link"):
+            title = link.get_text(" ", strip=True)
+            url = Decode_Search_Result_Url(link.get("href"))
+            if not title or not url or url in seen_urls or not Search_Result_Matches_Site(url, site):
+                continue
+
+            container = link.find_parent(class_="result")
+            snippet = ""
+            if container:
+                snippet_node = container.select_one(".result__snippet")
+                if snippet_node:
+                    snippet = snippet_node.get_text(" ", strip=True)
+
+            seen_urls.add(url)
+            PRINT("\n-Trinitty:fallback_web_result:", title)
+            results.append(Google_Result_Item(title, snippet, url))
+            if len(results) >= rnbr:
+                break
+    except Exception as e:
+        Log_Error("Fallback_Web_Search", e)
+        PRINT("\n-Trinitty:Fallback web search Error:", str(e))
+    return results
+
+
+def Search_Result_Title(results):
+    if not results:
+        return ""
+    return str(results[0].get("google_title") or "").strip()
+
+
 def GetTitleLink(txt, site=None):
     PRINT("\n-Trinitty:Dans la fonction GetTitleLink()")
     PRINT("\n-Trinitty:txt:", txt)
@@ -5122,10 +5246,9 @@ def GetTitleLink(txt, site=None):
                 search_items = data.get("items") or []
 
                 for result in search_items:
-
-                    title_search = result.get("title")
-
-                    if len(title_search) == 0:
+                    title_search = str(result.get("title") or "").strip()
+                    url = Decode_Search_Result_Url(result.get("link"))
+                    if len(title_search) == 0 or not Search_Result_Matches_Site(url, site):
                         continue
                     break
 
@@ -5144,20 +5267,9 @@ def GetTitleLink(txt, site=None):
     if (len(GOOGLE_KEY) == 0 and len(GOOGLE_ENGINE) == 0) or SearchFallback:
 
         try:
-            google_result = googlesearch.search(txt, num_results=10, lang="fr", advanced=True)
-
-            title_search = ""
-
-            for g in google_result:
-                if site:
-                    if site in g.url:
-                        PRINT("\n-Trinitty:google_result:", g.title)
-                        title_search = g.title
-                        break
-                else:
-                    PRINT("\n-Trinitty:google_result:", g.title)
-                    title_search = g.title
-                    break
+            title_search = Search_Result_Title(Googlesearch_Module_Search(txt, rnbr=10, site=site))
+            if len(title_search) == 0:
+                title_search = Search_Result_Title(Fallback_Web_Search(txt, rnbr=10, site=site))
 
             if len(title_search) == 0:
                 PRINT("\n-Trinitty:GetTitleLink no result from google")
@@ -5487,28 +5599,21 @@ def Google(to_search, rnbr=50,wiki_failed=False):  # ,tstmode = True):
 
         PRINT("\n-Trinitty:Using module googlesearch.")
         try:
-            google_query = googlesearch.search(to_search, num_results=rnbr, lang="fr", advanced=True)
-
-            for result in google_query:
-
-                title = getattr(result, "title", "")
-                description = getattr(result, "description", "")
-                url = getattr(result, "url", "")
-                google_result.append(Google_Result_Item(title, description, url))
-
-#                if wiki_failed:
-#                   if "wikipedia" in url:
-#                       google_result.append((title, description, url))
+            site = "wikipedia" if wiki_failed else None
+            google_result.extend(Googlesearch_Module_Search(to_search, rnbr=rnbr, site=site))
 
             if len(google_result) == 0:
-                PRINT("\n-Trinitty:-Google() no result from google")
-                Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_result_google.wav")
-                return ()
+                google_result.extend(Fallback_Web_Search(to_search, rnbr=rnbr, site=site))
 
         except Exception as e:
             Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_Google.wav")
             Log_Error("Google:googlesearch", e)
             PRINT("\n-Trinitty:Googlesearch Error:", str(e))
+            google_result.extend(Fallback_Web_Search(to_search, rnbr=rnbr, site="wikipedia" if wiki_failed else None))
+
+        if len(google_result) == 0:
+            PRINT("\n-Trinitty:-Google() no result from google")
+            Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_result_google.wav")
             return ()
 
     top20 = google_result[:20]

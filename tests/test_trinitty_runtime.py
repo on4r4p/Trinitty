@@ -2074,6 +2074,113 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn("q=albert+einstein", calls[0][1])
         self.assertEqual("Google", calls[-1][3])
 
+    def test_google_uses_web_fallback_when_google_sources_are_empty(self):
+        reset_command_state()
+        class Response:
+            def __init__(self, payload=None, text="", status_code=200):
+                self.payload = payload or {}
+                self.text = text
+                self.status_code = status_code
+
+            def json(self):
+                return self.payload
+
+        html = """
+        <html><body>
+          <div class="result">
+            <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fduckduckgo.com%2Fy.js%3Fad_domain%3Dexample.invalid">
+              Publicite
+            </a>
+          </div>
+          <div class="result">
+            <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.invalid%2Feinstein">
+              Albert Einstein
+            </a>
+            <a class="result__snippet">Physicien theoricien</a>
+          </div>
+        </body></html>
+        """
+
+        calls = []
+        original_key = getattr(trinitty, "GOOGLE_KEY", "")
+        original_engine = getattr(trinitty, "GOOGLE_ENGINE", "")
+        original_isolate = trinitty.Isolate_Search
+        original_get = trinitty.requests.get
+        original_search = trinitty.googlesearch.search
+        original_results_hub = trinitty.Results_Hub
+        original_play = trinitty.Play_Audio_File
+
+        def fake_get(url, **kwargs):
+            calls.append(("get", url, kwargs))
+            if "googleapis.com" in url:
+                return Response(payload={"items": []})
+            return Response(text=html)
+
+        trinitty.GOOGLE_KEY = "key"
+        trinitty.GOOGLE_ENGINE = "engine"
+        trinitty.Isolate_Search = lambda _text, _function_name: "fais une recherche sur google sur albert einstein"
+        trinitty.requests.get = fake_get
+        trinitty.googlesearch.search = lambda *_args, **_kwargs: []
+        trinitty.Results_Hub = lambda results, top_results, from_function=None: calls.append(
+            ("hub", results, top_results, from_function)
+        ) or "results"
+        trinitty.Play_Audio_File = lambda path, **_kwargs: calls.append(("play", path)) or 0
+        try:
+            self.assertEqual("results", trinitty.Google("cherche test", rnbr=1))
+        finally:
+            trinitty.GOOGLE_KEY = original_key
+            trinitty.GOOGLE_ENGINE = original_engine
+            trinitty.Isolate_Search = original_isolate
+            trinitty.requests.get = original_get
+            trinitty.googlesearch.search = original_search
+            trinitty.Results_Hub = original_results_hub
+            trinitty.Play_Audio_File = original_play
+
+        hub_call = calls[-1]
+        self.assertEqual("hub", hub_call[0])
+        self.assertEqual("Google", hub_call[3])
+        self.assertEqual("Albert Einstein", hub_call[1][0]["google_title"])
+        self.assertEqual("https://example.invalid/einstein", hub_call[1][0]["google_url"])
+        self.assertNotIn("play", [call[0] for call in calls])
+
+    def test_get_title_link_uses_web_fallback_with_site_filter(self):
+        reset_command_state()
+        class Response:
+            status_code = 200
+            text = """
+            <html><body>
+              <div class="result">
+                <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.invalid%2Feinstein">
+                  Albert Einstein officiel
+                </a>
+              </div>
+              <div class="result">
+                <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffr.wikipedia.org%2Fwiki%2FAlbert_Einstein">
+                  Albert Einstein - Wikipedia
+                </a>
+              </div>
+            </body></html>
+            """
+
+        original_key = getattr(trinitty, "GOOGLE_KEY", "")
+        original_engine = getattr(trinitty, "GOOGLE_ENGINE", "")
+        original_get = trinitty.requests.get
+        original_search = trinitty.googlesearch.search
+        original_play = trinitty.Play_Audio_File
+        trinitty.GOOGLE_KEY = ""
+        trinitty.GOOGLE_ENGINE = ""
+        trinitty.requests.get = lambda *_args, **_kwargs: Response()
+        trinitty.googlesearch.search = lambda *_args, **_kwargs: []
+        trinitty.Play_Audio_File = lambda *_args, **_kwargs: 0
+        try:
+            self.assertEqual("Albert Einstein - Wikipedia", trinitty.GetTitleLink("albert einstein", "wikipedia"))
+        finally:
+            trinitty.GOOGLE_KEY = original_key
+            trinitty.GOOGLE_ENGINE = original_engine
+            trinitty.requests.get = original_get
+            trinitty.googlesearch.search = original_search
+            trinitty.Play_Audio_File = original_play
+
     def test_clean_wikipedia_search_query_removes_command_noise(self):
         reset_command_state()
         self.assertEqual(
