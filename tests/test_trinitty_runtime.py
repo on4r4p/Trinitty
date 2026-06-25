@@ -898,6 +898,26 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertEqual(["show-history"], calls)
 
+    def test_command_routes_polite_internet_search_request_without_csv_trigger(self):
+        reset_command_state()
+        calls = []
+        original_google = trinitty.Google
+        trinitty.Google = lambda text: calls.append(text) or "google"
+        try:
+            self.assertTrue(
+                trinitty.Commandes("est-ce que tu peux faire une recherche sur Antoine Daniel sur Internet")
+            )
+        finally:
+            trinitty.Google = original_google
+
+        self.assertEqual(["est-ce que tu peux faire une recherche sur antoine daniel sur internet"], calls)
+
+    def test_direct_web_search_detection_ignores_history_requests(self):
+        reset_command_state()
+        self.assertFalse(
+            trinitty.Detect_Web_Search_Request("cherche dans l historique Antoine Daniel sur Internet")
+        )
+
     def test_prompt_empty_input_reports_no_input_and_returns_to_sleep(self):
         reset_command_state()
         reset_runtime_queues()

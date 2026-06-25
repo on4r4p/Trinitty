@@ -4431,6 +4431,31 @@ def SeeknReturn(var_to_check, list_elements):
     return final_found
 
 
+def Detect_Web_Search_Request(txt):
+    try:
+        query = Normalize_Search_Query_Text(txt)
+    except Exception as e:
+        Log_Error("Detect_Web_Search_Request", e)
+        query = str(txt or "").lower()
+    query = query.replace("'", " ")
+    query = re.sub(r"[^0-9a-zA-ZÀ-ÿ]+", " ", query)
+    query = re.sub(r"\s+", " ", query).strip()
+
+    if not query or re.search(r"\b(historique|history)\b", query):
+        return False
+
+    has_web_scope = re.search(r"\b(internet|google|web|wikipedia|wiki)\b", query)
+    if not has_web_scope:
+        return False
+
+    has_search_noun = re.search(r"\brecherches?\b", query)
+    has_search_verb = re.search(
+        r"\b(cherche|cherches|cherchez|chercher|recherche|recherches|recherchez|rechercher|trouve|trouves|trouvez|trouver|regarde|regardes|regardez|regarder|verifie|verifies|verifiez|verifier|consulte|consultez|consulter|fais|faire|lance|lancer)\b",
+        query,
+    )
+    return bool(has_search_noun or has_search_verb)
+
+
 def Disambiguify(ambiguities, txt):
 
     PRINT("\n-Trinitty:Disambiguify()")
@@ -4630,6 +4655,12 @@ def Check_Ambiguity(txt_input,allowed_functions=None, to_match=None, to_get=None
         found_delete_last_history = ("F_delete_last_history", SeeknReturn(trigger, Loaded_Delete_Last_History_Requests))
 
         found_search_web = ("F_search_web", SeeknReturn(trigger, Loaded_Search_Web_Requests))
+        direct_search_web = Detect_Web_Search_Request(trigger)
+        if direct_search_web:
+            search_web_triggers = list(found_search_web[1])
+            if "recherche*internet" not in search_web_triggers:
+                search_web_triggers.append("recherche*internet")
+            found_search_web = ("F_search_web", search_web_triggers)
 
         found_read_link = ("F_read_link", SeeknReturn(trigger, Loaded_Read_Link_Requests))
 
@@ -4701,7 +4732,7 @@ def Check_Ambiguity(txt_input,allowed_functions=None, to_match=None, to_get=None
                  found_read_results,
              ]
 
-        if found_actions_triggers or found_alt_triggers:
+        if found_actions_triggers or found_alt_triggers or direct_search_web:
 
             main_check = True
 

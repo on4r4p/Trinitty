@@ -128,6 +128,8 @@ F_play_audio,enregistrement
 F_play_audio,lecture*fichier
 F_search_web,[ avec / sur / dans ][*/][ wikipedia / google / internet ][un{e/} /des /][page{s/} /info{s/} /truc{s/} /article{s/} /][avec /sur /dans /][wikipedia/google/internet/]
 F_search_web,[pag{e /es }/inf{o /os }]*[parl{e /ent /ant /eraient }/concern{e /ent /eraient }/en rapport ]*[ wikipedia / google / internet ]
+F_search_web,[fais/faire/lance/lancer] [*/une /des ]recherche{s/} * [internet/google/web]
+F_search_web,[cherche/cherches/cherchez/recherche/recherches/recherchez/trouve/trouves/trouvez/regarde/regardes/regardez/verifie/verifies/verifiez/consulte/consultez] * [internet/google/web]
 F_wait,[me laisser/laiss{e/ez}-moi/attend{s/ez}]*[second{e/es}/minut{e/es}/{un peu de/du/plus de} temps/un peu]
 F_wait,[{mets-/fous-/}toi en {veille/pause}/{mettez/foutez} vous en {veille/pause}/{tais-toi/taisez-vous/ferme-la/fermez-la}]
 F_quit,[{ferme/fermez/quitte/quittez/sors/sortez} {ton/le/la/de/du/ta/votre} {programme/scripte/fonction}]
