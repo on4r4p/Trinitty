@@ -3,6 +3,7 @@
 Trinitty est un assistant vocal personnel pour Linux. Il utilise OpenAI en priorité pour répondre aux questions, puis bascule sur `gpt4free` si aucune clé OpenAI n'est configurée ou si l'appel OpenAI échoue.
 
 Le projet combine reconnaissance vocale, synthèse vocale, commandes locales, historique de conversation, recherche web et fournisseurs LLM de secours.
+Le wake word est Trinity.
 
 ## Fonctionnalités
 
@@ -140,6 +141,11 @@ Au premier lancement depuis une installation PyPI, Trinitty prépare automatique
 ~/.local/share/Trinitty/
 ```
 
+Pour vérifier ou réparer les dépendances après une installation ou une mise à jour:
+```bash
+trinitty --check-install
+```
+
 Les fichiers les plus utiles y sont créés sans écraser l'existant:
 
 - `datas/conf.trinity`: overrides locaux lus après la configuration fournie avec le package.
@@ -150,18 +156,6 @@ Les fichiers les plus utiles y sont créés sans écraser l'existant:
 - `history/`, `tmp/`, `saved_answer/`, `g4f_cookies/`: dossiers runtime.
 
 La configuration par défaut fournie avec le package est dans `datas/conf.trinity`. Pour éviter de publier des chemins ou préférences locales, placer les overrides dans `~/.local/share/Trinitty/datas/conf.trinity`.
-
-Pour vérifier ou réparer les dépendances après une installation ou une mise à jour:
-
-```bash
-trinitty --check-install
-```
-
-L'ancien comportement peut être réactivé si nécessaire:
-
-```bash
-export TRINITTY_AUTO_INSTALL_DEPENDENCIES=1
-```
 
 Exemple:
 

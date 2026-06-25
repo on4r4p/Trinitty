@@ -482,6 +482,37 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(1, len([call for call in calls if isinstance(call, tuple) and call[0] == "tokenize"]))
 
+    def test_preprocess_falls_back_when_nltk_data_is_missing(self):
+        reset_command_state()
+        originals = (
+            trinitty.word_tokenize,
+            trinitty.stopwords,
+            trinitty.WordNetLemmatizer,
+            trinitty.pos_tag,
+        )
+
+        class MissingStopwords:
+            def words(self, _language):
+                raise LookupError("missing stopwords")
+
+        class MissingLemmatizer:
+            def lemmatize(self, _word, _pos):
+                raise LookupError("missing wordnet")
+
+        trinitty.word_tokenize = lambda _text: (_ for _ in ()).throw(LookupError("missing punkt_tab"))
+        trinitty.stopwords = MissingStopwords()
+        trinitty.WordNetLemmatizer = lambda: MissingLemmatizer()
+        trinitty.pos_tag = lambda _tokens: (_ for _ in ()).throw(LookupError("missing tagger"))
+        try:
+            self.assertEqual("vitesse lumiere", trinitty.preprocess("Vitesse de la lumière"))
+        finally:
+            (
+                trinitty.word_tokenize,
+                trinitty.stopwords,
+                trinitty.WordNetLemmatizer,
+                trinitty.pos_tag,
+            ) = originals
+
     def test_get_spacy_nlp_loads_model_once(self):
         reset_command_state()
         original_spacy = trinitty.spacy

@@ -1168,7 +1168,69 @@ def Get_Spacy_Nlp():
 def French_Stop_Words():
     global FRENCH_STOP_WORDS
     if FRENCH_STOP_WORDS is None:
-        FRENCH_STOP_WORDS = set(stopwords.words("french"))
+        try:
+            FRENCH_STOP_WORDS = set(stopwords.words("french"))
+        except Exception as e:
+            PRINT("\n-Trinitty:French_Stop_Words fallback:%s" % str(e))
+            FRENCH_STOP_WORDS = {
+                "a",
+                "au",
+                "aux",
+                "avec",
+                "ce",
+                "ces",
+                "dans",
+                "de",
+                "des",
+                "du",
+                "elle",
+                "en",
+                "et",
+                "eux",
+                "il",
+                "ils",
+                "je",
+                "la",
+                "le",
+                "les",
+                "leur",
+                "lui",
+                "ma",
+                "mais",
+                "me",
+                "meme",
+                "mes",
+                "moi",
+                "mon",
+                "ne",
+                "nos",
+                "notre",
+                "nous",
+                "on",
+                "ou",
+                "par",
+                "pas",
+                "pour",
+                "qu",
+                "que",
+                "qui",
+                "sa",
+                "se",
+                "ses",
+                "son",
+                "sur",
+                "ta",
+                "te",
+                "tes",
+                "toi",
+                "ton",
+                "tu",
+                "un",
+                "une",
+                "vos",
+                "votre",
+                "vous",
+            }
     return FRENCH_STOP_WORDS
 
 
@@ -1177,6 +1239,31 @@ def Wordnet_Lemmatizer():
     if WORDNET_LEMMATIZER is None:
         WORDNET_LEMMATIZER = WordNetLemmatizer()
     return WORDNET_LEMMATIZER
+
+
+def Tokenize_For_Preprocess(sentence):
+    try:
+        return word_tokenize(sentence)
+    except Exception as e:
+        PRINT("\n-Trinitty:Tokenize_For_Preprocess fallback:%s" % str(e))
+        return re.findall(r"\b\w+\b", sentence)
+
+
+def Lemmatize_For_Preprocess(tokens):
+    try:
+        lemmatizer = Wordnet_Lemmatizer()
+        return [lemmatizer.lemmatize(word, get_wordnet_pos(tag)) for word, tag in pos_tag(tokens)]
+    except Exception as e:
+        PRINT("\n-Trinitty:Lemmatize_For_Preprocess fallback:%s" % str(e))
+        return tokens
+
+
+def Normalize_Ascii_For_Preprocess(value):
+    try:
+        value = unidecode(value)
+    except Exception as e:
+        PRINT("\n-Trinitty:Normalize_Ascii_For_Preprocess fallback:%s" % str(e))
+    return unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
 
 
 def Cached_Preprocess_Get(key):
@@ -7866,14 +7953,13 @@ def preprocess(txt,Isolate_Search=False):
     cached = Cached_Preprocess_Get(cache_key)
     if cached is not None:
         return cached
-    sentence = unidecode(txt)
+    sentence = Normalize_Ascii_For_Preprocess(txt)
     sentence = sentence.lower()
     sentence = "".join(char for char in sentence if char not in string.punctuation)
-    tokens = word_tokenize(sentence)
+    tokens = Tokenize_For_Preprocess(sentence)
     stop_words = French_Stop_Words()
     tokens = [word for word in tokens if word.isalnum() and word not in stop_words]
-    lemmatizer = Wordnet_Lemmatizer()
-    tokens = [lemmatizer.lemmatize(word, get_wordnet_pos(tag)) for word, tag in pos_tag(tokens)]
+    tokens = Lemmatize_For_Preprocess(tokens)
     return Cached_Preprocess_Set(cache_key, " ".join(tokens))
 
 def Quit(from_function=None):
