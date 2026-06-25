@@ -921,6 +921,7 @@ GOOGLE_LANGUAGE_TIMEOUT = 8.0
 HISTORY_CLASSIFICATION_ENABLED = True
 RESULTS_HUB_MAX_ATTEMPTS = 2
 RESULTS_HUB_CONTINUE = object()
+WAIT_TIMEOUT = object()
 GPT4FREE_COOKIES_LOADED = False
 GPT4FREE_RUNTIME_AVAILABLE = None
 
@@ -7033,7 +7034,7 @@ def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=N
                 break
         else:
             PRINT("\n-Trinitty:Wait timed out.")
-            cancel_operation.put(True)
+            keyword_index = WAIT_TIMEOUT
     except Exception as e:
         Log_Error("Wait", e)
         PRINT("\n-Trinitty:Wait:Error:%s" % str(e))
@@ -7046,6 +7047,8 @@ def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=N
             audio_stream.close()
         if pa is not None:
             pa.terminate()
+    if keyword_index is WAIT_TIMEOUT:
+        return WAIT_TIMEOUT
     if keyword_index == 1:
         return Prompt(allowed_functions,from_function)
     return None
@@ -7679,6 +7682,9 @@ def Results_Hub_Allowed_Functions(result_functions):
 
 
 def Results_Hub_Handle_Command(command, results_list, command_text=None, from_function=None):
+    if command is WAIT_TIMEOUT:
+        return Go_Back_To_Sleep(go_trinitty=True)
+
     if isinstance(command, tuple):
         command, command_text = command
 

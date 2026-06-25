@@ -1507,6 +1507,29 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertEqual(["Results_Hub"], calls)
 
+    def test_results_hub_wait_timeout_sleeps_without_recording(self):
+        reset_command_state()
+        reset_runtime_queues()
+        result = [{"google_title": "Ender Dragon", "google_url": "https://fr.minecraft.wiki/w/Ender_Dragon"}]
+        calls = []
+        original_wait = trinitty.Wait
+        original_start = trinitty.Start_Thread_Record
+        original_sleep = trinitty.Go_Back_To_Sleep
+        original_play = trinitty.Play_Audio_File
+        trinitty.Wait = lambda *_args, **_kwargs: trinitty.WAIT_TIMEOUT
+        trinitty.Start_Thread_Record = lambda: calls.append("start-record") or True
+        trinitty.Go_Back_To_Sleep = lambda go_trinitty=True: calls.append(("sleep", go_trinitty)) or "sleep"
+        trinitty.Play_Audio_File = lambda *_args, **_kwargs: 0
+        try:
+            self.assertEqual("sleep", trinitty.Results_Hub(result, from_function="Google"))
+        finally:
+            trinitty.Wait = original_wait
+            trinitty.Start_Thread_Record = original_start
+            trinitty.Go_Back_To_Sleep = original_sleep
+            trinitty.Play_Audio_File = original_play
+
+        self.assertEqual([("sleep", True)], calls)
+
     def test_results_hub_unknown_voice_command_exits_after_max_attempts(self):
         reset_command_state()
         reset_runtime_queues()
@@ -3613,7 +3636,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         trinitty.Play_Audio_File = lambda *_args, **_kwargs: 0
         try:
             started = time.monotonic()
-            self.assertIsNone(trinitty.Wait(timeout=0.01))
+            self.assertIs(trinitty.WAIT_TIMEOUT, trinitty.Wait(timeout=0.01))
             elapsed = time.monotonic() - started
         finally:
             trinitty.pvporcupine.create = original_create
@@ -3622,7 +3645,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Play_Audio_File = original_play
 
         self.assertLess(elapsed, 1)
-        self.assertFalse(trinitty.cancel_operation.empty())
+        self.assertTrue(trinitty.cancel_operation.empty())
         self.assertIn("delete", calls)
         self.assertIn("close", calls)
         self.assertIn("terminate", calls)
