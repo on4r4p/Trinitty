@@ -71,6 +71,8 @@ trinitty
 
 Le lanceur `~/.local/bin/trinitty` force automatiquement l'environnement propre nécessaire. Il utilise le Python du virtualenv, active `PYTHONNOUSERSITE=1` et vide `PYTHONPATH`.
 
+Le virtualenv Raspberry doit être créé avec `--system-site-packages` pour permettre à Trinitty d'utiliser `python3-pyaudio`, fourni par Debian/Raspberry Pi OS. Cela évite de compiler PyAudio sur la machine.
+
 ## Aide et commandes
 
 L'aide générale est disponible sans lancer l'assistant:
@@ -78,11 +80,16 @@ L'aide générale est disponible sans lancer l'assistant:
 ```bash
 trinitty -h
 trinitty --help
+trinitty --list-commands
+trinitty --explain-command "affiche l'historique"
+trinitty doctor
 ```
 
-Dans l'assistant, les commandes vocales comme `affiche ton aide`, `affiche tes commandes` ou `quelles sont tes fonctions` affichent cette aide et jouent l'aide audio.
+Dans l'assistant, les commandes vocales comme `affiche l'aide`, `affiche les commandes` ou `quelles sont les fonctions` affichent cette aide et jouent l'aide audio.
 
 Après une recherche web, Wikipedia ou historique, les résultats restent pilotables par la voix: `lis le résultat numéro 3`, `ouvre le résultat numéro 3`, `lis les trois premiers`, `choisis au hasard`, `attends` ou `quitte`.
+
+`trinitty doctor` vérifie l'état de l'installation sans modification. `trinitty doctor --fix` prépare les fichiers utilisateur puis lance l'installateur local si une réparation est possible.
 
 ## Installation depuis le dépôt
 
@@ -144,7 +151,7 @@ Les fichiers les plus utiles y sont créés sans écraser l'existant:
 
 La configuration par défaut fournie avec le package est dans `datas/conf.trinity`. Pour éviter de publier des chemins ou préférences locales, placer les overrides dans `~/.local/share/Trinitty/datas/conf.trinity`.
 
-Par défaut, Trinitty ne lance plus l'installateur de dépendances au démarrage. Pour vérifier ou réparer les dépendances après une installation ou une mise à jour:
+Pour vérifier ou réparer les dépendances après une installation ou une mise à jour:
 
 ```bash
 trinitty --check-install
@@ -165,15 +172,41 @@ OPENAI_MODEL = gpt-5.5
 OPENAI_TIMEOUT = 30
 GOOGLE_STT_TIMEOUT = 20
 GOOGLE_LANGUAGE_TIMEOUT = 8
+WEB_SEARCH_TIMEOUT = 10
+READ_LINK_TIMEOUT = 10
+STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
+STT_WORD_CONFIDENCE_MIN = 0.6
+STT_AVG_WORD_CONFIDENCE_MIN = 0.65
+STT_BAD_WORD_RATIO_MAX = 0.25
+STT_BAD_WORD_COUNT_MAX = 2
+STT_DEBUG = False
+STT_LOCAL_FALLBACK_ENABLED = False
+TTS_CACHE_ENABLED = True
+RESPONSE_STREAMING_ENABLED = True
+RESPONSE_STREAM_MIN_CHARS = 120
+RESPONSE_STREAM_MAX_CHARS = 450
+HISTORY_INDEX_ENABLED = True
+HISTORY_INDEX_PATH = cache/history_index.json
 HISTORY_CLASSIFICATION_ENABLED = True
 PLAYBACK_INTERRUPT_ENABLED = False
 GPT4FREE_SERVERS_STATUS = Active
 ```
 
+`RESPONSE_STREAMING_ENABLED = True` permet de commencer la synthèse vocale par segments dès qu'OpenAI fournit assez de texte, au lieu d'attendre toute la réponse. Si le streaming échoue avant le premier segment, Trinitty revient au mode OpenAI classique.
+
+`HISTORY_INDEX_ENABLED = True` crée un index dans `~/.local/share/Trinitty/cache/history_index.json` pour accélérer `Check_History`, l'affichage et la recherche dans l'historique. L'index est reconstruit uniquement quand les fichiers d'historique changent.
+
 `HISTORY_CLASSIFICATION_ENABLED = True` garde la catégorisation de l'historique active, mais elle est lancée en arrière-plan pour ne pas retarder l'envoi de la question à OpenAI ou au fallback gpt4free. `Check_History` reste exécuté sur l'historique local avant la requête principale.
 
 `PLAYBACK_INTERRUPT_ENABLED = True` réactive l'écoute micro pendant la lecture d'une réponse afin de permettre une interruption vocale. La valeur par défaut est `False` pour éviter que Trinitty enregistre pendant qu'elle parle.
 
+`STT_DEBUG = True` écrit, pour chaque reconnaissance vocale, un fichier audio brut `.raw` et un fichier `.json` contenant transcript, confiances, durée, provider utilisé et erreur éventuelle. Le dossier par défaut est `~/.local/share/Trinitty/logs/stt/`.
+
+`STT_LOCAL_FALLBACK_ENABLED = True` active le fallback local Vosk si Google Speech-to-Text échoue. Le modèle doit être disponible au chemin `STT_LOCAL_MODEL_PATH`, par exemple dans `~/.local/share/Trinitty/models/vosk-model-small-fr-0.22`.
+
+`TTS_CACHE_ENABLED = True` évite de régénérer plusieurs fois le même WAV pour le même texte et la même voix. Le cache par défaut est `~/.local/share/Trinitty/cache/tts/`.
+
+`PLAYBACK_INTERRUPT_ENABLED = True` fonctionne aussi en push-to-talk. Pendant la lecture d'une réponse, une commande comme `stop`, `arrête` ou `pause` peut interrompre l'audio.
 
 ## gpt4free
 
@@ -185,7 +218,13 @@ OpenAI reste le chemin principal. `gpt4free` sert de secours:
 - si OpenAI renvoie une erreur;
 - si OpenAI est désactivé avec `OPENAI_ENABLED = False`.
 
-Certains providers nécessitent des cookies ou des jetons. Les captures locales peuvent être placées dans `tools/har_and_cookies/`
+Certains providers nécessitent des cookies ou des jetons. Les captures locales peuvent être placées dans:
+
+```bash
+~/.local/share/Trinitty/g4f_cookies/import/
+```
+
+Trinitty synchronise ensuite ces captures vers son dossier de cookies runtime sans versionner de secrets.
 
 ## Dépannage
 

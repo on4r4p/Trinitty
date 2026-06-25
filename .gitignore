@@ -27,7 +27,6 @@ env/
 tmp/
 errtrin
 out.wav
-tools/*.wav
 *.log
 trinitty.py.save
 trinitty.py.save.*
@@ -49,16 +48,12 @@ datas/har_and_cookies/*
 
 # Runtime browser/cookie captures
 tools/har_and_cookies/
+tools/
 
 # Generated conversation history
 history/*
 !history/placeholder
 !history/.gitkeep
-tools/tool_history/*
-!tools/tool_history/*.py
-!tools/tool_history/.gitkeep
-tools/tool_history/history/
-tools/tool_history/old_history/
 
 # Generated saved-answer diagnostics
 local_sounds/saved_answer/saved_error/

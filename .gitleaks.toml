@@ -1,0 +1,9 @@
+title = "Trinitty secret scanning"
+
+[allowlist]
+description = "Fichiers non sensibles conservés dans le dépôt."
+paths = [
+  '''^keys/\.gitkeep$''',
+  '''^history/\.gitkeep$''',
+  '''^datas/har_and_cookies/placeholder$''',
+]

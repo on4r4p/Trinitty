@@ -1,41 +1,117 @@
 SAVED_ANSWER = default
-# Put machine-specific overrides in datas/conf.local.trinity.
+# Chemin des réponses audio sauvegardées. "default" utilise le dossier du package si possible, sinon le dossier utilisateur.
 
-OPENAI_ENABLED = True #True or False - use OpenAI before gpt4free
+OPENAI_ENABLED = True
+# True: utiliser OpenAI avant gpt4free. False: utiliser directement les fallbacks.
 OPENAI_MODEL = gpt-5.5
 OPENAI_API_KEY_FILE = keys/openai.key
+# Fichier contenant la clé OpenAI, une seule ligne, sans guillemets.
 OPENAI_TIMEOUT = 30
+# Délai maximum en secondes pour une requête OpenAI.
 OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
+
 SPACY_MODEL = fr_core_news_md
-GOOGLE_STT_TIMEOUT = 20 #seconds before cancelling Google Speech-to-Text
-GOOGLE_LANGUAGE_TIMEOUT = 8 #seconds before cancelling Google Natural Language classification
-HISTORY_CLASSIFICATION_ENABLED = True #True classifies history categories in a background worker
-GOOGLE_SORT_BY_DATE = False #True adds sort=date to Google Custom Search requests
+# Modèle spaCy utilisé pour certaines analyses de texte.
 
-#needbrowser g4f.Provider.Gemini,g4f.Provider.HailuoAI,g4f.Provider.Cloudflare
-#need fix g4f.Provider.Qwen
-#no answer g4f.Provider.Blackbox
-#chelou g4f.Provider.StringableInference
+GOOGLE_STT_TIMEOUT = 20
+# Délai maximum en secondes pour Google Speech-to-Text.
+GOOGLE_LANGUAGE_TIMEOUT = 8
+# Délai maximum en secondes pour Google Natural Language.
+WEB_SEARCH_TIMEOUT = 10
+# Délai maximum en secondes pour les recherches web et moteurs de fallback.
+READ_LINK_TIMEOUT = 10
+# Délai maximum en secondes pour lire une page web.
+PYPI_VERSION_TIMEOUT = 5
+# Délai maximum en secondes pour vérifier la version publiée sur PyPI.
+GPT4FREE_PROBE_TIMEOUT = 15
+# Délai maximum en secondes pour tester l'import de gpt4free dans un sous-processus.
+WAIT_FOR_TIMEOUT = 30
+# Délai maximum en secondes pour attendre une opération audio/question.
+WAIT_FOR_POLL_INTERVAL = 0.05
+# Intervalle de vérification des files internes pendant une attente.
+PLAYBACK_POLL_INTERVAL = 0.05
+# Intervalle de vérification pendant la lecture audio.
 
-# Auto-updated by Trinitty from gpt4free provider metadata.
+STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
+# Confiance minimale demandée pour la phrase complète reconnue.
+STT_WORD_CONFIDENCE_MIN = 0.6
+# Confiance minimale par mot avant de le considérer incertain.
+STT_AVG_WORD_CONFIDENCE_MIN = 0.65
+# Confiance moyenne minimale sur les mots.
+STT_BAD_WORD_RATIO_MAX = 0.25
+# Part maximale de mots incertains acceptée si la phrase globale est fiable.
+STT_BAD_WORD_COUNT_MAX = 2
+# Nombre maximal de mots incertains accepté si la phrase globale est fiable.
+STT_DEBUG = False
+# True: sauvegarde audio brut, transcript, confiances, durée et erreurs STT dans STT_DEBUG_DIR.
+STT_DEBUG_DIR = logs/stt
+# Dossier de debug STT relatif au dossier utilisateur Trinitty.
+STT_LOCAL_FALLBACK_ENABLED = False
+# True: tente Vosk en local si Google Speech-to-Text échoue.
+STT_LOCAL_MODEL_PATH = models/vosk-model-small-fr-0.22
+# Chemin du modèle Vosk, relatif au package ou au dossier utilisateur.
+
+TTS_CACHE_ENABLED = True
+# True: réutilise les WAV déjà générés pour le même texte et la même voix.
+TTS_CACHE_DIR = cache/tts
+# Dossier du cache TTS relatif au dossier utilisateur Trinitty.
+
+RESPONSE_STREAMING_ENABLED = True
+# True: commence la synthèse vocale dès qu'OpenAI fournit un segment de réponse exploitable.
+RESPONSE_STREAM_MIN_CHARS = 120
+# Taille minimale d'un segment avant lecture si une ponctuation permet une coupure naturelle.
+RESPONSE_STREAM_MAX_CHARS = 450
+# Taille maximale d'un segment vocal avant coupure forcée.
+TTS_PARALLEL_WORKERS = 1
+# Nombre de travailleurs TTS prévus pour la génération par segments. 1 garde un flux prudent sur Raspberry.
+HISTORY_INDEX_ENABLED = True
+# True: indexe l'historique pour éviter un scan complet coûteux à chaque question.
+HISTORY_INDEX_PATH = cache/history_index.json
+# Emplacement de l'index historique relatif au dossier utilisateur Trinitty.
+
+HISTORY_CLASSIFICATION_ENABLED = True
+# True: classe l'historique en arrière-plan.
+GOOGLE_SORT_BY_DATE = False
+# True: demande à Google Custom Search de trier par date quand l'API le permet.
+
+# Fournisseurs gpt4free mis à jour automatiquement par Trinitty depuis les métadonnées gpt4free.
 GPT4FREE_SERVERS_LIST = [g4f.Provider.Qwen,g4f.Provider.PollinationsAI,g4f.Provider.OpenaiChat,g4f.Provider.Yqcloud,g4f.Provider.Chatai,g4f.Provider.DeepInfra,g4f.Provider.LambdaChat,g4f.Provider.WeWordle,g4f.Provider.GLM,g4f.Provider.TeachAnything,g4f.Provider.ApiAirforce,g4f.Provider.GradientNetwork,g4f.Provider.ItalyGPT,g4f.Provider.Mintlify,g4f.Provider.OIVSCodeSer0501,g4f.Provider.OIVSCodeSer2,g4f.Provider.Perplexity,g4f.Provider.BAAI_Ling,g4f.Provider.CohereForAI_C4AI_Command,g4f.Provider.Copilot,g4f.Provider.DeepseekAI_JanusPro7b,g4f.Provider.HuggingSpace,g4f.Provider.Microsoft_Phi_4_Multimodal,g4f.Provider.Qwen_Qwen_2_5,g4f.Provider.Qwen_Qwen_2_5_Max,g4f.Provider.Qwen_Qwen_2_5M,g4f.Provider.Qwen_Qwen_2_72B,g4f.Provider.Qwen_Qwen_3]
+# Mettre None pour laisser Trinitty découvrir les fournisseurs gpt4free.
+GPT4FREE_SERVERS_STATUS = Active
+# Active, Unknown, All ou None si GPT4FREE_SERVERS_LIST vaut None.
+GPT4FREE_SERVERS_AUTH = False
+# True, False ou All pour filtrer les fournisseurs demandant une authentification.
+GPT4FREE_COOKIES_AUTO_SYNC = True
+# True: copie les captures HAR/JSON depuis GPT4FREE_COOKIES_SYNC_DIR avant de charger les cookies.
+GPT4FREE_COOKIES_SYNC_DIR = g4f_cookies/import
+# Dossier source des captures cookies. Relatif au dossier utilisateur si le chemin commence par g4f_cookies.
+GPT4FREE_AUTO_REJECT_NOTWORKING = True
+# True: ignore les fournisseurs gpt4free marqués working=False.
 
-#GPT4FREE_SERVERS_LIST = [g4f.Provider.P1,g4f.Provider.P2] or None
-GPT4FREE_SERVERS_STATUS = Active #Active or Unknown or All or None (GPT4FREE_SERVERS_LIST must be None if set)
-GPT4FREE_SERVERS_AUTH = False #True or False or All
-GPT4FREE_COOKIES_AUTO_SYNC = True #True or False - copy har/json captures before loading cookies
-GPT4FREE_COOKIES_SYNC_DIR = tools/har_and_cookies
-GPT4FREE_AUTO_REJECT_NOTWORKING = True #True rejects g4f providers marked working=False
-INTERPRETOR = False #True or False - use keyboard instead of mic
-PUSH_TO_TALK = False #True or False - press Enter instead of wake word
-PLAYBACK_INTERRUPT_ENABLED = False #True records during playback to listen for stop commands
-PLAYBACK_INTERRUPT_TIMEOUT = 30 #seconds to keep listening during one playback
-COMMAND_CLASSIFIER_ENABLED = False #True or False - use optional TensorFlow command classifier
-COMMAND_CLASSIFIER_THRESHOLD = 0.65 #minimum classifier score to run command matching
+INTERPRETOR = False
+# True: utiliser le clavier au lieu du micro.
+PUSH_TO_TALK = False
+# True: appuyer sur Entrée au lieu d'utiliser le wake word.
+PLAYBACK_INTERRUPT_ENABLED = False
+# True: écouter les commandes stop/arrête pendant la lecture d'une réponse.
+PLAYBACK_INTERRUPT_TIMEOUT = 30
+# Durée maximale en secondes pour écouter une interruption pendant une lecture.
+
+COMMAND_CLASSIFIER_ENABLED = False
+# True: utiliser le classifieur TensorFlow optionnel.
+COMMAND_CLASSIFIER_THRESHOLD = 0.65
+# Score minimal du classifieur pour accepter une commande.
 COMMAND_CLASSIFIER_MODEL_PATH = datas/command_classifier.keras
-CHECK_UPDATE = False #Check update for Trinitty or g4f
-DEBUG = True #Print debug stuffs
-CMD_DBG = False #Print commands results only for testing purpose
-SYNTAX_DBG = False #Print output of Special syntax found in database at launch
-SEARCH_DBG = False #Test output from Isolate_Search only .
-XCB_ERROR_FIX = True #Fix Xcb error from popping due to DISPLAY env variable.
+
+CHECK_UPDATE = False
+# True: avertir si une version PyPI plus récente existe.
+DEBUG = False
+# True: afficher les logs détaillés et écrire le journal debug. False accélère l'exécution normale.
+CMD_DBG = False
+# True: mode debug des commandes.
+SYNTAX_DBG = False
+# True: affiche les sorties de syntaxe spéciale au chargement.
+SEARCH_DBG = False
+# True: mode test pour l'extraction des requêtes de recherche.
+XCB_ERROR_FIX = True
+# True: masque certains avertissements XCB liés à DISPLAY.

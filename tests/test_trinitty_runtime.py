@@ -1,10 +1,8 @@
 import builtins
-import importlib.util
 import contextlib
 import io
 import os
 import base64
-import subprocess
 import tempfile
 import time
 import unittest
@@ -33,17 +31,63 @@ def reset_command_state():
     trinitty.COMMAND_CLASSIFIER_THRESHOLD = 0.65
     trinitty.COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"
     trinitty.COMMAND_CLASSIFIER_MODEL = None
+    trinitty.WAIT_FOR_TIMEOUT = 30.0
+    trinitty.WAIT_FOR_POLL_INTERVAL = 0.05
+    trinitty.PLAYBACK_POLL_INTERVAL = 0.05
+    trinitty.STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
+    trinitty.STT_WORD_CONFIDENCE_MIN = 0.6
+    trinitty.STT_AVG_WORD_CONFIDENCE_MIN = 0.65
+    trinitty.STT_BAD_WORD_RATIO_MAX = 0.25
+    trinitty.STT_BAD_WORD_COUNT_MAX = 2
+    trinitty.STT_DEBUG = False
+    trinitty.STT_DEBUG_DIR = "logs/stt"
+    trinitty.STT_LOCAL_FALLBACK_ENABLED = False
+    trinitty.STT_LOCAL_MODEL_PATH = "models/vosk-model-small-fr-0.22"
     trinitty.GOOGLE_STT_TIMEOUT = 20.0
     trinitty.GOOGLE_LANGUAGE_TIMEOUT = 8.0
+    trinitty.WEB_SEARCH_TIMEOUT = 10.0
+    trinitty.READ_LINK_TIMEOUT = 10.0
+    trinitty.PYPI_VERSION_TIMEOUT = 5.0
+    trinitty.GPT4FREE_PROBE_TIMEOUT = 15.0
+    trinitty.TTS_CACHE_ENABLED = False
+    trinitty.TTS_CACHE_DIR = "cache/tts"
+    trinitty.RESPONSE_STREAMING_ENABLED = True
+    trinitty.RESPONSE_STREAM_MIN_CHARS = 120
+    trinitty.RESPONSE_STREAM_MAX_CHARS = 450
+    trinitty.TTS_PARALLEL_WORKERS = 1
+    trinitty.HISTORY_INDEX_ENABLED = True
+    trinitty.HISTORY_INDEX_PATH = "cache/history_index.json"
+    trinitty.GOOGLE_SPEECH_CLIENT = None
+    trinitty.GOOGLE_TTS_CLIENT = None
+    trinitty.GOOGLE_LANGUAGE_CLIENT = None
+    trinitty.OPENAI_CLIENT = None
+    trinitty.OPENAI_CLIENT_CONFIG = None
+    trinitty.VOSK_MODEL = None
+    trinitty.SPACY_NLP = None
+    trinitty.SPACY_NLP_MODEL = None
+    trinitty.FRENCH_STOP_WORDS = None
+    trinitty.WORDNET_LEMMATIZER = None
+    trinitty.PREPROCESS_CACHE = trinitty.OrderedDict()
+    trinitty.HISTORY_INDEX_CACHE = None
+    trinitty.HISTORY_INDEX_SIGNATURE = None
+    trinitty.COMMAND_TRIGGER_INDEX = {}
+    trinitty.COMMAND_REGISTRY_READY = False
     trinitty.HISTORY_CLASSIFICATION_ENABLED = True
+    trinitty.OPENAI_ENABLED = True
+    trinitty.OPENAI_API_KEY = ""
+    trinitty.OPENAI_API_KEY_FILE = "keys/openai.key"
+    trinitty.OPENAI_MODEL = "gpt-5.5"
+    trinitty.OPENAI_TIMEOUT = 30.0
+    trinitty.OPENAI_INSTRUCTIONS = "Reponds en francais de facon concise et naturelle."
     trinitty.GPT4FREE_COOKIES_AUTO_SYNC = True
-    trinitty.GPT4FREE_COOKIES_SYNC_DIR = "tools/har_and_cookies"
+    trinitty.GPT4FREE_COOKIES_SYNC_DIR = "g4f_cookies/import"
     trinitty.GPT4FREE_COOKIES_LOADED = False
     trinitty.GPT4FREE_RUNTIME_AVAILABLE = None
     trinitty.SCRIPT_PATH = str(ROOT)
     trinitty.LAST_DIALOG = []
     trinitty.unidecode = lambda value: value
 
+    trinitty.Loaded_History_List = []
     trinitty.Loaded_Actions_Words_Requests = []
     trinitty.Loaded_Alternatives_Triggers = []
     trinitty.Loaded_Add_Triggers_Requests = []
@@ -229,6 +273,232 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertFalse(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
             self.assertEqual("PLAYBACK_INTERRUPT_ENABLED = True # custom local choice\n", user_conf.read_text())
 
+    def test_tts_cache_round_trip_uses_text_hash(self):
+        reset_command_state()
+        original_home = os.environ.get("HOME")
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.environ["HOME"] = str(Path(tmp) / "home")
+                trinitty.TTS_CACHE_ENABLED = True
+                source = Path(tmp) / "source.wav"
+                destination = Path(tmp) / "destination.wav"
+                source.write_bytes(b"wav-data")
+
+                self.assertTrue(trinitty.Save_Tts_Cache("bonjour", str(source), provider="google"))
+                self.assertTrue(trinitty.Try_Load_Tts_Cache("bonjour", str(destination), provider="google"))
+                self.assertEqual(b"wav-data", destination.read_bytes())
+                self.assertFalse(trinitty.Try_Load_Tts_Cache("autre texte", str(Path(tmp) / "miss.wav"), provider="google"))
+            finally:
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+
+    def test_google_tts_client_is_reused(self):
+        reset_command_state()
+        original_tts = trinitty.tts
+        calls = []
+
+        class FakeClient:
+            pass
+
+        trinitty.tts = SimpleNamespace(TextToSpeechClient=lambda: calls.append("new") or FakeClient())
+        try:
+            first = trinitty.Get_Google_TTS_Client()
+            second = trinitty.Get_Google_TTS_Client()
+        finally:
+            trinitty.tts = original_tts
+            trinitty.GOOGLE_TTS_CLIENT = None
+
+        self.assertIs(first, second)
+        self.assertEqual(["new"], calls)
+
+    def test_openai_client_is_reused_for_same_key_and_timeout(self):
+        reset_command_state()
+        original_openai = trinitty.OpenAI
+        calls = []
+
+        class FakeOpenAIClient:
+            pass
+
+        def fake_openai(**kwargs):
+            calls.append(kwargs)
+            return FakeOpenAIClient()
+
+        trinitty.OpenAI = fake_openai
+        try:
+            first = trinitty.Get_OpenAI_Client(api_key="sk-one", timeout=7)
+            second = trinitty.Get_OpenAI_Client(api_key="sk-one", timeout=7)
+            third = trinitty.Get_OpenAI_Client(api_key="sk-one", timeout=8)
+        finally:
+            trinitty.OpenAI = original_openai
+            trinitty.OPENAI_CLIENT = None
+            trinitty.OPENAI_CLIENT_CONFIG = None
+
+        self.assertIs(first, second)
+        self.assertIsNot(first, third)
+        self.assertEqual(
+            [{"api_key": "sk-one", "timeout": 7.0}, {"api_key": "sk-one", "timeout": 8.0}],
+            calls,
+        )
+
+    def test_openai_stream_splits_deltas_into_segments(self):
+        reset_command_state()
+        trinitty.RESPONSE_STREAM_MIN_CHARS = 10
+        trinitty.RESPONSE_STREAM_MAX_CHARS = 40
+        original_get_client = trinitty.Get_OpenAI_Client
+        original_load_key = trinitty.Openai_Load_Key
+
+        class FakeStream:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def __iter__(self):
+                yield SimpleNamespace(delta="Premiere phrase. ")
+                yield SimpleNamespace(delta="Deuxieme phrase complete.")
+
+            def get_final_response(self):
+                return SimpleNamespace(output_text="")
+
+        class FakeResponses:
+            def stream(self, **kwargs):
+                self.kwargs = kwargs
+                return FakeStream()
+
+        fake_responses = FakeResponses()
+        trinitty.Get_OpenAI_Client = lambda api_key=None, timeout=None: SimpleNamespace(responses=fake_responses)
+        trinitty.Openai_Load_Key = lambda: "sk-test"
+        try:
+            segments = list(trinitty.Openai_Gpt_Stream("question"))
+        finally:
+            trinitty.Get_OpenAI_Client = original_get_client
+            trinitty.Openai_Load_Key = original_load_key
+
+        self.assertEqual(["Premiere phrase.", "Deuxieme phrase complete."], segments)
+        self.assertEqual("question", fake_responses.kwargs["input"])
+        self.assertEqual(30.0, fake_responses.kwargs["timeout"])
+
+    def test_text_to_speech_streamed_plays_first_segment_before_end(self):
+        reset_command_state()
+        reset_runtime_queues()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trinitty.SCRIPT_PATH = str(root)
+            trinitty.SAVED_ANSWER = str(root / "saved")
+            trinitty.last_sentence.put("question")
+            calls = []
+            originals = (
+                trinitty.Synthesize_Text_To_Wav,
+                trinitty.Play_Audio_File_With_Interrupt,
+                trinitty.Concatenate_Wav_Files,
+                trinitty.Save_History,
+                trinitty.Go_Back_To_Sleep,
+                getattr(trinitty, "DLANG_KEY", None),
+                getattr(trinitty, "GOOGLE_TRANSLATE", None),
+            )
+
+            def fake_synthesize(text, path, voice="fr-FR-Neural2-A"):
+                calls.append(("tts", text))
+                Path(path).write_bytes(text.encode())
+                return True
+
+            trinitty.Synthesize_Text_To_Wav = fake_synthesize
+            trinitty.Play_Audio_File_With_Interrupt = lambda path: calls.append(("play", Path(path).name)) or 0
+            trinitty.Concatenate_Wav_Files = lambda _wav_files, output_path: Path(output_path).write_bytes(b"wav") or True
+            trinitty.Save_History = lambda answer, no_audio=False: calls.append(("history", answer, no_audio))
+            trinitty.Go_Back_To_Sleep = lambda go_trinitty=True: calls.append(("sleep", go_trinitty)) or "sleep"
+            trinitty.DLANG_KEY = False
+            trinitty.GOOGLE_TRANSLATE = False
+            try:
+                result = trinitty.Text_To_Speech_Streamed(
+                    iter(["Premiere phrase.", "Deuxieme phrase."]),
+                    before_first_play=lambda: calls.append("stop-wait"),
+                )
+            finally:
+                (
+                    trinitty.Synthesize_Text_To_Wav,
+                    trinitty.Play_Audio_File_With_Interrupt,
+                    trinitty.Concatenate_Wav_Files,
+                    trinitty.Save_History,
+                    trinitty.Go_Back_To_Sleep,
+                    trinitty.DLANG_KEY,
+                    trinitty.GOOGLE_TRANSLATE,
+                ) = originals
+
+        self.assertEqual("sleep", result)
+        self.assertEqual(
+            [
+                ("tts", "Premiere phrase."),
+                "stop-wait",
+                ("play", "stream_answer0000.wav"),
+                ("tts", "Deuxieme phrase."),
+                ("play", "stream_answer0001.wav"),
+                ("history", "Premiere phrase. Deuxieme phrase.", False),
+                ("sleep", True),
+            ],
+            calls,
+        )
+
+    def test_preprocess_uses_lru_cache_for_repeated_text(self):
+        reset_command_state()
+        calls = []
+        originals = (
+            trinitty.word_tokenize,
+            trinitty.stopwords,
+            trinitty.WordNetLemmatizer,
+            trinitty.pos_tag,
+            trinitty.wordnet,
+        )
+
+        class FakeStopwords:
+            def words(self, language):
+                calls.append(("stopwords", language))
+                return ["de"]
+
+        class FakeLemmatizer:
+            def lemmatize(self, word, _pos):
+                return word
+
+        trinitty.word_tokenize = lambda text: calls.append(("tokenize", text)) or text.split()
+        trinitty.stopwords = FakeStopwords()
+        trinitty.WordNetLemmatizer = lambda: calls.append("lemmatizer") or FakeLemmatizer()
+        trinitty.pos_tag = lambda tokens: [(token, "N") for token in tokens]
+        trinitty.wordnet = SimpleNamespace(NOUN="n", VERB="v", ADJ="a", ADV="r")
+        try:
+            first = trinitty.preprocess("Vitesse de la lumiere")
+            second = trinitty.preprocess("Vitesse de la lumiere")
+        finally:
+            (
+                trinitty.word_tokenize,
+                trinitty.stopwords,
+                trinitty.WordNetLemmatizer,
+                trinitty.pos_tag,
+                trinitty.wordnet,
+            ) = originals
+
+        self.assertEqual(first, second)
+        self.assertEqual(1, len([call for call in calls if isinstance(call, tuple) and call[0] == "tokenize"]))
+
+    def test_get_spacy_nlp_loads_model_once(self):
+        reset_command_state()
+        original_spacy = trinitty.spacy
+        calls = []
+        model = object()
+        trinitty.spacy = SimpleNamespace(load=lambda name: calls.append(name) or model)
+        try:
+            first = trinitty.Get_Spacy_Nlp()
+            second = trinitty.Get_Spacy_Nlp()
+        finally:
+            trinitty.spacy = original_spacy
+            trinitty.SPACY_NLP = None
+            trinitty.SPACY_NLP_MODEL = None
+
+        self.assertIs(first, second)
+        self.assertEqual(["fr_core_news_md"], calls)
+
     def test_initialize_user_data_migrates_legacy_user_local_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
@@ -340,6 +610,55 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Auto_Run_Dependency_Installer = original_auto_run
 
         self.assertEqual([("/tmp/trinitty-user", True)], calls)
+
+    def test_list_commands_argument_prints_command_catalog(self):
+        original_argv = trinitty.sys.argv
+        original_ensure = trinitty.Ensure_Command_Registry_Loaded
+        try:
+            trinitty.sys.argv = ["trinitty", "--list-commands"]
+            trinitty.Ensure_Command_Registry_Loaded = lambda: True
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertTrue(trinitty.Handle_Utility_Args())
+        finally:
+            trinitty.sys.argv = original_argv
+            trinitty.Ensure_Command_Registry_Loaded = original_ensure
+
+        self.assertIn("Commandes vocales Trinitty", output.getvalue())
+        self.assertIn("F_search_web", output.getvalue())
+
+    def test_explain_command_argument_prints_detected_command(self):
+        original_argv = trinitty.sys.argv
+        original_ensure = trinitty.Ensure_Command_Registry_Loaded
+        original_check = trinitty.Check_Ambiguity
+        try:
+            trinitty.sys.argv = ["trinitty", "--explain-command", "affiche", "historique"]
+            trinitty.Ensure_Command_Registry_Loaded = lambda: True
+            trinitty.Check_Ambiguity = lambda phrase: {"F_show_history": [(phrase, ["affiche*historique"])]}
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertTrue(trinitty.Handle_Utility_Args())
+        finally:
+            trinitty.sys.argv = original_argv
+            trinitty.Ensure_Command_Registry_Loaded = original_ensure
+            trinitty.Check_Ambiguity = original_check
+
+        self.assertIn("F_show_history", output.getvalue())
+        self.assertIn("affiche*historique", output.getvalue())
+
+    def test_doctor_fix_argument_runs_dependency_installer(self):
+        calls = []
+        original_argv = trinitty.sys.argv
+        original_doctor = trinitty.Trinitty_Doctor
+        try:
+            trinitty.sys.argv = ["trinitty", "doctor", "--fix"]
+            trinitty.Trinitty_Doctor = lambda fix=False: calls.append(fix) or True
+            self.assertTrue(trinitty.Handle_Utility_Args())
+        finally:
+            trinitty.sys.argv = original_argv
+            trinitty.Trinitty_Doctor = original_doctor
+
+        self.assertEqual([True], calls)
 
     def test_help_command_detects_affiche_ton_aide(self):
         reset_command_state()
@@ -518,31 +837,6 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 delattr(trinitty, "SCRIPT_PATH")
             else:
                 trinitty.SCRIPT_PATH = original_script_path
-
-    def test_tools_nbr_is_importable_without_playback_side_effect(self):
-        calls = []
-        original_run = subprocess.run
-        subprocess.run = lambda *args, **kwargs: calls.append((args, kwargs))
-        try:
-            spec = importlib.util.spec_from_file_location("tool_nbr_test", ROOT / "tools" / "nbr.py")
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-        finally:
-            subprocess.run = original_run
-
-        self.assertEqual([], calls)
-        expected_number_wavs = [
-            str(ROOT / "local_sounds" / "dates" / "milliers" / "deux_mille.wav"),
-            str(ROOT / "local_sounds" / "dates" / "nombres" / "vingt-quatre.wav"),
-        ]
-        self.assertEqual(" ".join(expected_number_wavs), module.NbrToTts(number=2024))
-
-        try:
-            module.subprocess.run = lambda command, check=False: calls.append((command, check)) or SimpleNamespace(returncode=0)
-            self.assertEqual(0, module.NbrToTts(timestamp=1707350400.0))
-        finally:
-            module.subprocess.run = original_run
-        self.assertTrue(all(Path(path).exists() for path in calls[0][0][2:]))
 
     def test_run_pico2wave_does_not_use_shell(self):
         calls = []
@@ -1603,12 +1897,24 @@ class TrinittyRuntimeTests(unittest.TestCase):
             calls,
         )
 
-    def test_playback_interrupt_listener_is_disabled_in_push_to_talk(self):
+    def test_playback_interrupt_listener_can_run_in_push_to_talk_when_enabled(self):
         reset_command_state()
+        reset_runtime_queues()
         trinitty.INTERPRETOR = False
         trinitty.PUSH_TO_TALK = True
-        self.assertFalse(trinitty.Playback_Interrupt_Listener(trinitty.Event(), timeout=0.01))
-        self.assertIsNone(trinitty.Start_Playback_Interrupt_Listener())
+        trinitty.PLAYBACK_INTERRUPT_ENABLED = True
+        calls = []
+        original_start = trinitty.Start_Thread_Record
+        original_stop = trinitty.Stop_Recording
+        trinitty.Start_Thread_Record = lambda: calls.append("start") or True
+        trinitty.Stop_Recording = lambda: calls.append("stop")
+        try:
+            self.assertFalse(trinitty.Playback_Interrupt_Listener(trinitty.Event(), timeout=0.01))
+        finally:
+            trinitty.Start_Thread_Record = original_start
+            trinitty.Stop_Recording = original_stop
+
+        self.assertEqual(["start", "stop"], calls)
 
     def test_results_hub_voice_quit_exits_loop(self):
         reset_command_state()
@@ -1786,6 +2092,67 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertEqual("Search_History", calls[0][2])
         self.assertEqual(1, len(calls[0][0]))
         self.assertEqual("science", calls[0][0][0]["hist_cats"])
+
+    def test_history_index_reuses_cache_and_rebuilds_when_history_changes(self):
+        reset_command_state()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            history = root / "history"
+            cache = root / "cache" / "history_index.json"
+            history.mkdir()
+            trinitty.SCRIPT_PATH = str(root)
+            trinitty.HISTORY_INDEX_PATH = str(cache)
+            rows = [
+                {
+                    "hist_file": "cat",
+                    "hist_cats": "cat",
+                    "hist_input_full": "question un",
+                    "hist_input_short": "question un",
+                    "hist_input_wav": "",
+                    "hist_output": "reponse un",
+                    "hist_output_wav": "one.wav",
+                    "hist_urls": "",
+                    "hist_epok": "1",
+                    "hist_tstamp": "2026-06-25 12:00:00",
+                }
+            ]
+            trinitty.Write_History_File(str(history / "cat"), rows)
+
+            first = trinitty.Ensure_History_Index_Loaded(force=True)
+            self.assertEqual(1, len(first))
+            self.assertTrue(cache.exists())
+
+            original_reader = trinitty.Read_History_Files
+            trinitty.HISTORY_INDEX_CACHE = None
+            trinitty.HISTORY_INDEX_SIGNATURE = None
+            trinitty.Loaded_History_List = []
+            trinitty.Read_History_Files = lambda: self.fail("history CSV should not be read when index is fresh")
+            try:
+                second = trinitty.Ensure_History_Index_Loaded()
+            finally:
+                trinitty.Read_History_Files = original_reader
+            self.assertEqual(["question un"], [row["hist_input_full"] for row in second])
+
+            rows.append(
+                {
+                    "hist_file": "cat",
+                    "hist_cats": "cat",
+                    "hist_input_full": "question deux",
+                    "hist_input_short": "question deux",
+                    "hist_input_wav": "",
+                    "hist_output": "reponse deux",
+                    "hist_output_wav": "two.wav",
+                    "hist_urls": "",
+                    "hist_epok": "2",
+                    "hist_tstamp": "2026-06-25 12:01:00",
+                }
+            )
+            trinitty.Write_History_File(str(history / "cat"), rows)
+            trinitty.HISTORY_INDEX_CACHE = None
+            trinitty.HISTORY_INDEX_SIGNATURE = None
+            rebuilt = trinitty.Ensure_History_Index_Loaded()
+
+        self.assertEqual(["question un", "question deux"], [row["hist_input_full"] for row in rebuilt])
 
     def test_delete_last_history_entry_removes_latest_row(self):
         reset_command_state()
@@ -2134,6 +2501,47 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertFalse((tmp_dir / "answer0000.wav").exists())
             self.assertTrue((tmp_dir / "current_answer.wav").exists())
 
+    def test_text_to_speech_has_no_artificial_segment_sleep_on_success(self):
+        reset_command_state()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "saved" / "saved_error").mkdir(parents=True)
+            trinitty.SCRIPT_PATH = str(root)
+            trinitty.SAVED_ANSWER = str(root / "saved")
+            sleep_calls = []
+            originals = (
+                trinitty.Synthesize_Text_To_Wav,
+                trinitty.sox,
+                trinitty.time.sleep,
+                trinitty.Play_Response,
+                getattr(trinitty, "DLANG_KEY", None),
+                getattr(trinitty, "GOOGLE_TRANSLATE", None),
+            )
+
+            def fake_synthesize(_text, path, voice="fr-FR-Neural2-A"):
+                Path(path).write_bytes(b"wav")
+                return True
+
+            trinitty.Synthesize_Text_To_Wav = fake_synthesize
+            trinitty.sox = SimpleNamespace(file_info=SimpleNamespace(sample_rate=lambda _path: 24000))
+            trinitty.time.sleep = lambda seconds: sleep_calls.append(seconds)
+            trinitty.Play_Response = lambda **_kwargs: "played"
+            trinitty.DLANG_KEY = False
+            trinitty.GOOGLE_TRANSLATE = False
+            try:
+                self.assertEqual("played", trinitty.Text_To_Speech("bonjour", savehistory=False))
+            finally:
+                (
+                    trinitty.Synthesize_Text_To_Wav,
+                    trinitty.sox,
+                    trinitty.time.sleep,
+                    trinitty.Play_Response,
+                    trinitty.DLANG_KEY,
+                    trinitty.GOOGLE_TRANSLATE,
+                ) = originals
+
+        self.assertEqual([], sleep_calls)
+
     def test_google_custom_search_handles_missing_description(self):
         reset_command_state()
         class Response:
@@ -2212,6 +2620,25 @@ class TrinittyRuntimeTests(unittest.TestCase):
             "albert einstein",
             trinitty.Clean_Web_Search_Query("fais une recherche sur google sur albert einstein"),
         )
+
+    def test_rank_search_results_demotes_shopping_for_guide_query(self):
+        reset_command_state()
+        results = [
+            trinitty.Google_Result_Item(
+                "Amazon.fr : Ender Dragon Minecraft",
+                "acheter lego",
+                "https://www.amazon.fr/ender-dragon-minecraft",
+            ),
+            trinitty.Google_Result_Item(
+                "Ender Dragon Minecraft Guide complet",
+                "strategie et astuces",
+                "https://fr.minecraft.wiki/w/Ender_Dragon",
+            ),
+        ]
+
+        ranked = trinitty.Rank_Search_Results(results, "comment battre le dragon ender minecraft")
+
+        self.assertEqual("Ender Dragon Minecraft Guide complet", ranked[0]["google_title"])
 
     def test_google_uses_clean_query_and_fallback_when_custom_search_empty(self):
         reset_command_state()
@@ -2593,6 +3020,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         trinitty.SCRIPT_PATH = str(ROOT)
         trinitty.GPT4FREE_SERVERS_STATUS = False
         trinitty.Providers_To_Use = None
+        trinitty.RESPONSE_STREAMING_ENABLED = False
         calls = []
         original_check_history = trinitty.Check_History
         original_openai = trinitty.Openai_Gpt
@@ -2626,6 +3054,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         reset_command_state()
         reset_runtime_queues()
         trinitty.GPT4FREE_SERVERS_STATUS = False
+        trinitty.RESPONSE_STREAMING_ENABLED = False
         calls = []
         originals = (
             trinitty.Start_Wait_Response_Audio,
@@ -2655,11 +3084,61 @@ class TrinittyRuntimeTests(unittest.TestCase):
             calls,
         )
 
+    def test_to_gpt_uses_streaming_before_nonstreaming_openai(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.GPT4FREE_SERVERS_STATUS = False
+        trinitty.RESPONSE_STREAMING_ENABLED = True
+        calls = []
+        originals = (
+            trinitty.Start_Wait_Response_Audio,
+            trinitty.Stop_Wait_Response_Audio,
+            trinitty.Check_History,
+            trinitty.Openai_Gpt_Stream,
+            trinitty.Text_To_Speech_Streamed,
+            trinitty.Openai_Gpt,
+        )
+        trinitty.Start_Wait_Response_Audio = lambda: calls.append("wait-start") or "wait-handle"
+        trinitty.Stop_Wait_Response_Audio = lambda handle: calls.append(("wait-stop", handle))
+        trinitty.Check_History = lambda _text, **_kwargs: calls.append("history") or False
+        trinitty.Openai_Gpt_Stream = lambda text: calls.append(("stream", text)) or iter(["segment"])
+
+        def fake_streamed(segment_iter, stayawake=False, savehistory=True, before_first_play=None):
+            calls.append(("streamed-tts", list(segment_iter), stayawake, savehistory))
+            before_first_play()
+            return "streamed"
+
+        trinitty.Text_To_Speech_Streamed = fake_streamed
+        trinitty.Openai_Gpt = lambda _text: calls.append("openai") or "reponse"
+        try:
+            self.assertEqual("streamed", trinitty.To_Gpt("question"))
+        finally:
+            (
+                trinitty.Start_Wait_Response_Audio,
+                trinitty.Stop_Wait_Response_Audio,
+                trinitty.Check_History,
+                trinitty.Openai_Gpt_Stream,
+                trinitty.Text_To_Speech_Streamed,
+                trinitty.Openai_Gpt,
+            ) = originals
+
+        self.assertEqual(
+            [
+                "wait-start",
+                "history",
+                ("stream", "question"),
+                ("streamed-tts", ["segment"], False, True),
+                ("wait-stop", "wait-handle"),
+            ],
+            calls,
+        )
+
     def test_to_gpt_keeps_history_mandatory_while_classification_runs_in_worker(self):
         reset_command_state()
         reset_runtime_queues()
         trinitty.SCRIPT_PATH = str(ROOT)
         trinitty.GPT4FREE_SERVERS_STATUS = False
+        trinitty.RESPONSE_STREAMING_ENABLED = False
         trinitty.Current_Category = []
         trinitty.Loaded_History_List = [
             {
@@ -2738,6 +3217,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         trinitty.GPT4FREE_SERVERS_STATUS = "Active"
         trinitty.GPT4FREE_RUNTIME_AVAILABLE = True
         trinitty.Providers_To_Use = None
+        trinitty.RESPONSE_STREAMING_ENABLED = False
         calls = []
         original_check_history = trinitty.Check_History
         original_openai = trinitty.Openai_Gpt
@@ -3157,6 +3637,106 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn("Speech_To_Text:google speech timeout", err_msg)
         self.assertEqual("Speech_To_Text", trinitty.Runtime_Errors[-1]["context"])
 
+    def test_speech_to_text_debug_writes_audio_and_metadata(self):
+        reset_command_state()
+        original_speech = trinitty.speech
+        original_home = os.environ.get("HOME")
+
+        class FakeRecognitionConfig:
+            AudioEncoding = SimpleNamespace(LINEAR16="linear16")
+
+            def __init__(self, **_kwargs):
+                pass
+
+        class FakeRecognitionAudio:
+            def __init__(self, content):
+                self.content = content
+
+        class FakeSpeechClient:
+            def recognize(self, request, timeout=None):
+                word = SimpleNamespace(word="bonjour", confidence=0.91)
+                alternative = SimpleNamespace(transcript="bonjour", confidence=0.93, words=[word])
+                return SimpleNamespace(results=[SimpleNamespace(alternatives=[alternative])])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.environ["HOME"] = str(Path(tmp) / "home")
+                trinitty.STT_DEBUG = True
+                trinitty.STT_DEBUG_DIR = "logs/stt-test"
+                trinitty.speech = SimpleNamespace(
+                    SpeechClient=FakeSpeechClient,
+                    RecognitionAudio=FakeRecognitionAudio,
+                    RecognitionConfig=FakeRecognitionConfig,
+                )
+                self.assertEqual(("bonjour", 0.93, ["bonjour"], [0.91], ""), trinitty.Speech_To_Text(b"raw-audio"))
+            finally:
+                trinitty.speech = original_speech
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+
+            debug_dir = Path(tmp) / "home" / ".local" / "share" / "Trinitty" / "logs" / "stt-test"
+            self.assertEqual(1, len(list(debug_dir.glob("*.raw"))))
+            metadata = next(debug_dir.glob("*.json")).read_text()
+            self.assertIn('"provider": "google"', metadata)
+            self.assertIn('"transcript": "bonjour"', metadata)
+            self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", metadata)
+
+    def test_speech_to_text_uses_vosk_fallback_when_google_fails(self):
+        reset_command_state()
+        original_speech = trinitty.speech
+        original_vosk = trinitty.vosk
+        original_model_path = trinitty.Existing_Runtime_Model_Path
+        trinitty.STT_LOCAL_FALLBACK_ENABLED = True
+        trinitty.STT_LOCAL_MODEL_PATH = "models/vosk-test"
+
+        class FakeRecognitionConfig:
+            AudioEncoding = SimpleNamespace(LINEAR16="linear16")
+
+            def __init__(self, **_kwargs):
+                pass
+
+        class FakeRecognitionAudio:
+            def __init__(self, content):
+                self.content = content
+
+        class BrokenSpeechClient:
+            def recognize(self, request, timeout=None):
+                raise RuntimeError("google down")
+
+        class FakeRecognizer:
+            def __init__(self, model, rate):
+                self.model = model
+                self.rate = rate
+
+            def AcceptWaveform(self, audio):
+                return True
+
+            def Result(self):
+                return '{"text": "bonjour local", "result": [{"word": "bonjour", "conf": 0.8}, {"word": "local", "conf": 0.9}]}'
+
+        trinitty.speech = SimpleNamespace(
+            SpeechClient=BrokenSpeechClient,
+            RecognitionAudio=FakeRecognitionAudio,
+            RecognitionConfig=FakeRecognitionConfig,
+        )
+        trinitty.vosk = SimpleNamespace(Model=lambda path: ("model", path), KaldiRecognizer=FakeRecognizer)
+        trinitty.Existing_Runtime_Model_Path = lambda path: "/tmp/vosk-model"
+        try:
+            transcripts, confidence, words, words_confidence, err_msg = trinitty.Speech_To_Text(b"audio")
+        finally:
+            trinitty.speech = original_speech
+            trinitty.vosk = original_vosk
+            trinitty.Existing_Runtime_Model_Path = original_model_path
+            trinitty.VOSK_MODEL = None
+
+        self.assertEqual("bonjour local", transcripts)
+        self.assertAlmostEqual(0.85, confidence)
+        self.assertEqual(["bonjour", "local"], words)
+        self.assertEqual([0.8, 0.9], words_confidence)
+        self.assertEqual("", err_msg)
+
     @unittest.skipUnless(hasattr(trinitty.signal, "SIGALRM"), "SIGALRM is POSIX-only")
     def test_runtime_timeout_raises_on_main_thread(self):
         reset_command_state()
@@ -3335,7 +3915,22 @@ class TrinittyRuntimeTests(unittest.TestCase):
                         "OPENAI_TIMEOUT = 12",
                         'OPENAI_INSTRUCTIONS = "Keep # as plain text" # inline comment',
                         "SPACY_MODEL = fr_core_news_md",
+                        "STT_TRANSCRIPT_CONFIDENCE_MIN = 0.55",
+                        "STT_WORD_CONFIDENCE_MIN = 0.45",
+                        "STT_DEBUG = True",
+                        "STT_LOCAL_FALLBACK_ENABLED = True",
+                        "STT_LOCAL_MODEL_PATH = models/vosk-test",
                         "GOOGLE_LANGUAGE_TIMEOUT = 13",
+                        "WEB_SEARCH_TIMEOUT = 9",
+                        "READ_LINK_TIMEOUT = 6",
+                        "TTS_CACHE_ENABLED = False",
+                        "TTS_CACHE_DIR = cache/custom-tts",
+                        "RESPONSE_STREAMING_ENABLED = False",
+                        "RESPONSE_STREAM_MIN_CHARS = 90",
+                        "RESPONSE_STREAM_MAX_CHARS = 300",
+                        "TTS_PARALLEL_WORKERS = 2",
+                        "HISTORY_INDEX_ENABLED = False",
+                        "HISTORY_INDEX_PATH = cache/custom-history.json",
                         "HISTORY_CLASSIFICATION_ENABLED = True",
                         "GPT4FREE_SERVERS_LIST = None",
                         "GPT4FREE_SERVERS_STATUS = None",
@@ -3357,6 +3952,21 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertEqual(7.0, trinitty.OPENAI_TIMEOUT)
             self.assertEqual(11.0, trinitty.GOOGLE_STT_TIMEOUT)
             self.assertEqual(5.0, trinitty.GOOGLE_LANGUAGE_TIMEOUT)
+            self.assertEqual(0.55, trinitty.STT_TRANSCRIPT_CONFIDENCE_MIN)
+            self.assertEqual(0.45, trinitty.STT_WORD_CONFIDENCE_MIN)
+            self.assertTrue(trinitty.STT_DEBUG)
+            self.assertTrue(trinitty.STT_LOCAL_FALLBACK_ENABLED)
+            self.assertEqual("models/vosk-test", trinitty.STT_LOCAL_MODEL_PATH)
+            self.assertEqual(9.0, trinitty.WEB_SEARCH_TIMEOUT)
+            self.assertEqual(6.0, trinitty.READ_LINK_TIMEOUT)
+            self.assertFalse(trinitty.TTS_CACHE_ENABLED)
+            self.assertEqual("cache/custom-tts", trinitty.TTS_CACHE_DIR)
+            self.assertFalse(trinitty.RESPONSE_STREAMING_ENABLED)
+            self.assertEqual(90, trinitty.RESPONSE_STREAM_MIN_CHARS)
+            self.assertEqual(300, trinitty.RESPONSE_STREAM_MAX_CHARS)
+            self.assertEqual(2, trinitty.TTS_PARALLEL_WORKERS)
+            self.assertFalse(trinitty.HISTORY_INDEX_ENABLED)
+            self.assertEqual("cache/custom-history.json", trinitty.HISTORY_INDEX_PATH)
             self.assertFalse(trinitty.HISTORY_CLASSIFICATION_ENABLED)
             self.assertEqual("Keep # as plain text", trinitty.OPENAI_INSTRUCTIONS)
             self.assertTrue((local_saved / "saved_error").exists())
@@ -3580,6 +4190,23 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 else:
                     os.environ["HOME"] = original_home
 
+    def test_gpt4free_cookie_capture_source_uses_user_data_for_g4f_cookies_path(self):
+        reset_command_state()
+        original_home = os.environ.get("HOME")
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.environ["HOME"] = str(Path(tmp) / "home")
+                trinitty.GPT4FREE_COOKIES_SYNC_DIR = "g4f_cookies/import"
+                self.assertEqual(
+                    str(Path(tmp) / "home" / ".local" / "share" / "Trinitty" / "g4f_cookies" / "import"),
+                    trinitty.Gpt4free_Cookie_Capture_Source_Dir(),
+                )
+            finally:
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+
     def test_gpt4free_auth_provider_requires_cookie_or_key(self):
         reset_command_state()
 
@@ -3616,12 +4243,13 @@ class TrinittyRuntimeTests(unittest.TestCase):
         reset_command_state()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source = root / "tools" / "har_and_cookies"
+            source = root / "g4f_cookies" / "import"
             dest = root / "datas" / "har_and_cookies"
             source.mkdir(parents=True)
             dest.mkdir(parents=True)
             (source / "chatgpt.com_Archive.har").write_text("har")
             trinitty.SCRIPT_PATH = str(root)
+            trinitty.GPT4FREE_COOKIES_SYNC_DIR = str(source)
             calls = []
             original_set = trinitty.set_cookies_dir
             original_read = trinitty.read_cookie_files

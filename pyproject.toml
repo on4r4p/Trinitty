@@ -54,8 +54,13 @@ browser-providers = [
 command-classifier = [
   "tensorflow",
 ]
+local-stt = [
+  "vosk>=0.3.45",
+]
 dev = [
   "build>=1.2",
+  "pre-commit>=3.7",
+  "pytest>=8",
   "ruff>=0.5",
   "twine>=5.1",
 ]

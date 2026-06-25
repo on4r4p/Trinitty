@@ -2,6 +2,7 @@
 
 import csv
 import base64
+import hashlib
 import html
 import importlib
 from importlib import metadata as importlib_metadata
@@ -24,6 +25,7 @@ import unicodedata
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import urlopen
 
+from collections import OrderedDict
 from difflib import SequenceMatcher
 
 from datetime import datetime
@@ -147,7 +149,13 @@ def Existing_Config_File(relative_path):
 
 
 def Packaged_Config_File():
-    return os.path.join(globals().get("SCRIPT_PATH", Default_Script_Path()), "datas", "conf.trinity")
+    configured = os.path.join(globals().get("SCRIPT_PATH", Default_Script_Path()), "datas", "conf.trinity")
+    if os.path.exists(configured):
+        return configured
+    fallback = os.path.join(Default_Script_Path(), "datas", "conf.trinity")
+    if os.path.exists(fallback):
+        return fallback
+    return configured
 
 
 def Packaged_Config_Text():
@@ -198,6 +206,10 @@ Usage terminal:
   trinitty                       Lance l'assistant vocal.
   trinitty -h, trinitty --help   Affiche cette aide.
   trinitty --check-install       Vérifie/installe les dépendances locales.
+  trinitty doctor                Vérifie l'installation sans rien modifier.
+  trinitty doctor --fix          Prépare les fichiers utilisateur puis lance l'installateur.
+  trinitty --list-commands       Affiche les commandes vocales connues.
+  trinitty --explain-command "phrase"  Explique quelle commande une phrase déclenche.
   trinitty --dependency-help     Affiche les commandes de réparation des dépendances.
   trinitty --install-launcher    Crée le lanceur propre dans ~/.local/bin/trinitty.
 
@@ -239,12 +251,136 @@ def Trinitty_Help(play_audio=True):
     return True
 
 
+def Ensure_Command_Registry_Loaded():
+    global SCRIPT_PATH
+    global CMDFILE, ALTFILE, TRIFILE, ACTFILE, PREFILE, SYNFILE
+    global COMMAND_REGISTRY_READY
+
+    if globals().get("COMMAND_REGISTRY_READY", False):
+        return True
+
+    SCRIPT_PATH = globals().get("SCRIPT_PATH", Default_Script_Path())
+    CMDFILE = os.path.join(SCRIPT_PATH, "datas", "cmd.trinity")
+    ALTFILE = os.path.join(SCRIPT_PATH, "datas", "alt_cmd.trinity")
+    TRIFILE = os.path.join(SCRIPT_PATH, "datas", "alt_trigger.trinity")
+    ACTFILE = os.path.join(SCRIPT_PATH, "datas", "action.trinity")
+    PREFILE = os.path.join(SCRIPT_PATH, "datas", "prefix.trinity")
+    SYNFILE = os.path.join(SCRIPT_PATH, "datas", "synonym.trinity")
+
+    if not Load_Csv():
+        return False
+    COMMAND_REGISTRY_READY = True
+    return True
+
+
+def Command_Function_Metadata():
+    return [
+        ("F_trinity_help", "Afficher l'aide generale", ["affiche ton aide"]),
+        ("F_prompt", "Passer en saisie clavier", ["invite de commande"]),
+        ("F_search_web", "Faire une recherche web", ["fais une recherche internet sur albert einstein"]),
+        ("F_read_results", "Lire les resultats affiches", ["lis le resultat numero 3"]),
+        ("F_read_link", "Lire ou ouvrir une page web", ["ouvre le resultat numero 3"]),
+        ("F_show_history", "Afficher l'historique", ["affiche l'historique"]),
+        ("F_search_history", "Chercher dans l'historique", ["cherche dans l'historique la vitesse de la lumiere"]),
+        ("F_delete_last_history", "Supprimer la derniere entree d'historique", ["efface la derniere entree"]),
+        ("F_repeat", "Repeter la derniere reponse", ["repete"]),
+        ("F_wait", "Attendre ou stopper la lecture en cours", ["attends", "arrete"]),
+        ("F_quit", "Quitter Trinitty", ["quitte le programme"]),
+        ("F_rnd", "Faire un choix aleatoire", ["choisis entre un et deux"]),
+        ("F_play_audio", "Lire un fichier audio", ["joue ce fichier audio"]),
+        ("F_add_trigger", "Ajouter un declencheur vocal", ["ajoute un nouveau trigger"]),
+    ]
+
+
+def Loaded_Command_Trigger_Count(function_name):
+    mapping = {
+        "F_trinity_help": "Loaded_Trinitty_Help_Requests",
+        "F_prompt": "Loaded_Prompt_Requests",
+        "F_search_web": "Loaded_Search_Web_Requests",
+        "F_read_results": "Loaded_Read_Results",
+        "F_read_link": "Loaded_Read_Link_Requests",
+        "F_show_history": "Loaded_Show_History_Requests",
+        "F_search_history": "Loaded_Search_History_Requests",
+        "F_delete_last_history": "Loaded_Delete_Last_History_Requests",
+        "F_repeat": "Loaded_Repeat_Requests",
+        "F_wait": "Loaded_Wait_Words_Requests",
+        "F_quit": "Loaded_Quit_Words_Requests",
+        "F_rnd": "Loaded_Rnd_Requests",
+        "F_play_audio": "Loaded_Play_Audio_File_Requests",
+        "F_add_trigger": "Loaded_Add_Triggers_Requests",
+    }
+    value = globals().get(mapping.get(function_name, ""), [])
+    return len(value or [])
+
+
+def List_Commands_Text():
+    Ensure_Command_Registry_Loaded()
+    lines = ["Commandes vocales Trinitty:"]
+    for function_name, description, examples in Command_Function_Metadata():
+        lines.append(
+            "- %s: %s (%s declencheurs). Exemple: \"%s\""
+            % (function_name, description, Loaded_Command_Trigger_Count(function_name), examples[0])
+        )
+    lines.append("")
+    lines.append("Avec des resultats affiches: dites \"lis le resultat numero 3\", \"ouvre le resultat numero 3\" ou \"attends\".")
+    return "\n".join(lines)
+
+
+def Explain_Command_Text(phrase):
+    Ensure_Command_Registry_Loaded()
+    phrase = str(phrase or "").strip()
+    if not phrase:
+        return "Aucune phrase fournie."
+    ambiguity = Check_Ambiguity(phrase)
+    if not ambiguity:
+        return "Aucune commande detectee pour: %s" % phrase
+    lines = ["Phrase: %s" % phrase, "Commandes detectees:"]
+    for function_name, matches in ambiguity.items():
+        triggers = []
+        for _raw, found in matches:
+            triggers.extend(found)
+        lines.append("- %s via %s" % (function_name, ", ".join(dict.fromkeys(triggers))))
+    return "\n".join(lines)
+
+
+def Trinitty_Doctor(fix=False):
+    root = Initialize_User_Data()
+    checks = []
+    checks.append(("dossier utilisateur", os.path.isdir(root), root))
+    checks.append(("configuration utilisateur", os.path.isfile(User_Data_Path("datas", "conf.trinity")), User_Data_Path("datas", "conf.trinity")))
+    checks.append(("configuration package", os.path.isfile(Packaged_Config_File()), Packaged_Config_File()))
+    checks.append(("installateur Debian", bool(Install_Dependencies_Script_Path()), Install_Dependencies_Script_Path() or "introuvable"))
+    checks.append(("PyAudio", Audio_Input_Available(), "necessaire pour le micro"))
+    checks.append(("Google credentials", bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")), "GOOGLE_APPLICATION_CREDENTIALS"))
+    checks.append(("OpenAI key", bool(Openai_Load_Key()), Openai_Key_Source_For_Log()))
+    checks.append(("g4f import", Ensure_Gpt4free_Runtime_Available(), "fallback gpt4free"))
+
+    print("Diagnostic Trinitty:")
+    for label, ok, detail in checks:
+        print("- %s: %s (%s)" % (label, "OK" if ok else "A verifier", detail))
+
+    if fix:
+        Auto_Run_Dependency_Installer(root, force=True)
+    else:
+        print("\nPour tenter une correction automatique: trinitty doctor --fix")
+    return all(ok for _label, ok, _detail in checks)
+
+
 def Handle_Utility_Args():
     if len(sys.argv) < 2:
         return False
     command = sys.argv[1]
     if command in ("-h", "--help", "help"):
         print(Trinitty_Help_Text())
+        return True
+    if command == "doctor":
+        Trinitty_Doctor(fix="--fix" in sys.argv[2:])
+        return True
+    if command == "--list-commands":
+        print(List_Commands_Text())
+        return True
+    if command == "--explain-command":
+        print(Explain_Command_Text(" ".join(sys.argv[2:])))
         return True
     if command == "--check-install":
         root = Initialize_User_Data()
@@ -468,6 +604,8 @@ def Dependency_Install_Help_Summary(package_name=None):
 def Config_Keys_From_Text(text):
     keys = []
     for line in str(text or "").splitlines():
+        if not line.strip() or line.strip().startswith("#"):
+            continue
         key, _value = Config_Option_Value(line)
         if key and key not in keys:
             keys.append(key)
@@ -820,7 +958,7 @@ def Ensure_Gpt4free_Runtime_Available():
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=15,
+            timeout=Config_Positive_Float(globals().get("GPT4FREE_PROBE_TIMEOUT", 15.0), 15.0),
             check=False,
         )
     except Exception as e:
@@ -880,6 +1018,7 @@ github_module = Optional_Import("github", "PyGithub")
 Github = Optional_Attribute(github_module, "Github", "PyGithub")
 unidecode_module = Optional_Import("unidecode", "Unidecode")
 unidecode = Optional_Attribute(unidecode_module, "unidecode", "Unidecode")
+vosk = Optional_Import("vosk")
 
 g4f_debug = Optional_Import("g4f.debug", "g4f")
 
@@ -911,6 +1050,238 @@ def Configure_Default_Google_Credentials():
 
 
 Configure_Default_Google_Credentials()
+
+
+def Runtime_User_Path(configured, default_parts):
+    configured = str(configured or "").strip()
+    if not configured:
+        return User_Data_Path(*default_parts)
+    configured = os.path.expandvars(os.path.expanduser(configured))
+    if os.path.isabs(configured):
+        return configured
+    return User_Data_Path(configured)
+
+
+def Tts_Cache_Dir():
+    return Runtime_User_Path(globals().get("TTS_CACHE_DIR", "cache/tts"), ("cache", "tts"))
+
+
+def Stt_Debug_Dir():
+    return Runtime_User_Path(globals().get("STT_DEBUG_DIR", "logs/stt"), ("logs", "stt"))
+
+
+def Tts_Cache_Key(text, provider="google", voice="fr-FR-Neural2-A"):
+    digest = hashlib.sha256()
+    digest.update(str(provider or "").encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(str(voice or "").encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(str(text or "").encode("utf-8"))
+    return digest.hexdigest()
+
+
+def Tts_Cache_Path(text, provider="google", voice="fr-FR-Neural2-A"):
+    return os.path.join(Tts_Cache_Dir(), "%s.wav" % Tts_Cache_Key(text, provider=provider, voice=voice))
+
+
+def Try_Load_Tts_Cache(text, destination, provider="google", voice="fr-FR-Neural2-A"):
+    if not Config_Bool(globals().get("TTS_CACHE_ENABLED", True), default=True):
+        return False
+    cache_path = Tts_Cache_Path(text, provider=provider, voice=voice)
+    if not os.path.isfile(cache_path):
+        return False
+    try:
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        copyfile(cache_path, destination)
+        PRINT("\n-Trinitty:TTS cache hit:%s" % cache_path)
+        return True
+    except Exception as e:
+        Log_Error("Try_Load_Tts_Cache", e)
+        return False
+
+
+def Save_Tts_Cache(text, source, provider="google", voice="fr-FR-Neural2-A"):
+    if not Config_Bool(globals().get("TTS_CACHE_ENABLED", True), default=True):
+        return False
+    if not os.path.isfile(source):
+        return False
+    cache_path = Tts_Cache_Path(text, provider=provider, voice=voice)
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        if not os.path.exists(cache_path):
+            copyfile(source, cache_path)
+            PRINT("\n-Trinitty:TTS cache saved:%s" % cache_path)
+        return True
+    except Exception as e:
+        Log_Error("Save_Tts_Cache", e)
+        return False
+
+
+def Get_Google_Speech_Client():
+    global GOOGLE_SPEECH_CLIENT
+    if GOOGLE_SPEECH_CLIENT is None:
+        GOOGLE_SPEECH_CLIENT = speech.SpeechClient()
+    return GOOGLE_SPEECH_CLIENT
+
+
+def Get_Google_TTS_Client():
+    global GOOGLE_TTS_CLIENT
+    if GOOGLE_TTS_CLIENT is None:
+        GOOGLE_TTS_CLIENT = tts.TextToSpeechClient()
+    return GOOGLE_TTS_CLIENT
+
+
+def Get_Google_Language_Client():
+    global GOOGLE_LANGUAGE_CLIENT
+    if GOOGLE_LANGUAGE_CLIENT is None:
+        GOOGLE_LANGUAGE_CLIENT = language_v1.LanguageServiceClient()
+    return GOOGLE_LANGUAGE_CLIENT
+
+
+def Get_OpenAI_Client(api_key=None, timeout=None):
+    global OPENAI_CLIENT, OPENAI_CLIENT_CONFIG
+
+    if api_key is None:
+        api_key = Openai_Load_Key()
+    if not api_key:
+        return None
+    if timeout is None:
+        timeout = Config_Positive_Float(globals().get("OPENAI_TIMEOUT", 30.0), 30.0)
+
+    config = (str(api_key), float(timeout))
+    if OPENAI_CLIENT is None or OPENAI_CLIENT_CONFIG != config:
+        OPENAI_CLIENT = OpenAI(api_key=api_key, timeout=float(timeout))
+        OPENAI_CLIENT_CONFIG = config
+    return OPENAI_CLIENT
+
+
+def Get_Spacy_Nlp():
+    global SPACY_NLP, SPACY_NLP_MODEL
+
+    model_name = str(globals().get("SPACY_MODEL", "fr_core_news_md") or "fr_core_news_md").strip()
+    if SPACY_NLP is None or SPACY_NLP_MODEL != model_name:
+        SPACY_NLP = spacy.load(model_name)
+        SPACY_NLP_MODEL = model_name
+    return SPACY_NLP
+
+
+def French_Stop_Words():
+    global FRENCH_STOP_WORDS
+    if FRENCH_STOP_WORDS is None:
+        FRENCH_STOP_WORDS = set(stopwords.words("french"))
+    return FRENCH_STOP_WORDS
+
+
+def Wordnet_Lemmatizer():
+    global WORDNET_LEMMATIZER
+    if WORDNET_LEMMATIZER is None:
+        WORDNET_LEMMATIZER = WordNetLemmatizer()
+    return WORDNET_LEMMATIZER
+
+
+def Cached_Preprocess_Get(key):
+    value = PREPROCESS_CACHE.get(key)
+    if value is None:
+        return None
+    PREPROCESS_CACHE.move_to_end(key)
+    return value
+
+
+def Cached_Preprocess_Set(key, value):
+    PREPROCESS_CACHE[key] = value
+    PREPROCESS_CACHE.move_to_end(key)
+    while len(PREPROCESS_CACHE) > PREPROCESS_CACHE_MAX:
+        PREPROCESS_CACHE.popitem(last=False)
+    return value
+
+
+def Reset_Google_Clients():
+    global GOOGLE_SPEECH_CLIENT, GOOGLE_TTS_CLIENT, GOOGLE_LANGUAGE_CLIENT
+    GOOGLE_SPEECH_CLIENT = None
+    GOOGLE_TTS_CLIENT = None
+    GOOGLE_LANGUAGE_CLIENT = None
+
+
+def Existing_Runtime_Model_Path(path):
+    path = str(path or "").strip()
+    if not path:
+        return ""
+    candidates = Config_File_Candidates(path)
+    candidates.extend(User_Data_Path_Candidates(path))
+    for candidate in dict.fromkeys(candidates):
+        if os.path.exists(candidate):
+            return candidate
+    return ""
+
+
+def Get_Vosk_Model():
+    global VOSK_MODEL
+    if VOSK_MODEL is not None:
+        return VOSK_MODEL
+    model_path = Existing_Runtime_Model_Path(globals().get("STT_LOCAL_MODEL_PATH", ""))
+    if not model_path:
+        raise RuntimeError("modele Vosk introuvable: %s" % globals().get("STT_LOCAL_MODEL_PATH", ""))
+    VOSK_MODEL = vosk.Model(model_path)
+    return VOSK_MODEL
+
+
+def Local_STT_Fallback(audio):
+    if not Config_Bool(globals().get("STT_LOCAL_FALLBACK_ENABLED", False), default=False):
+        return ("", 0, [], [], "")
+    try:
+        recognizer = vosk.KaldiRecognizer(Get_Vosk_Model(), 16000)
+        recognizer.AcceptWaveform(audio)
+        payload = recognizer.Result() or recognizer.FinalResult()
+        data = json.loads(payload or "{}")
+        transcript = str(data.get("text") or "").strip()
+        words = transcript.split()
+        confidence = 0.0
+        word_confidence = []
+        if isinstance(data.get("result"), list) and data["result"]:
+            confidence_values = [float(item.get("conf", 0.0)) for item in data["result"] if "conf" in item]
+            if confidence_values:
+                confidence = sum(confidence_values) / len(confidence_values)
+                word_confidence = confidence_values
+        if words and not word_confidence:
+            word_confidence = [confidence or 0.75 for _word in words]
+        if transcript:
+            PRINT("\n-Trinitty:STT local Vosk transcript:%s" % transcript)
+        return (transcript, confidence, words, word_confidence, "")
+    except Exception as e:
+        Log_Error("Local_STT_Fallback", e)
+        return ("", 0, [], [], "Local_STT_Fallback:%s" % str(e))
+
+
+def Save_STT_Debug(audio, provider, duration, transcripts, transcripts_confidence, words, words_confidence, err_msg):
+    if not Config_Bool(globals().get("STT_DEBUG", False), default=False):
+        return ""
+    try:
+        debug_dir = Stt_Debug_Dir()
+        os.makedirs(debug_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        base = os.path.join(debug_dir, "stt-%s" % stamp)
+        raw_path = base + ".raw"
+        json_path = base + ".json"
+        with open(raw_path, "wb") as f:
+            f.write(audio or b"")
+        metadata = {
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "provider": str(provider or ""),
+            "duration_seconds": float(duration or 0),
+            "transcript": str(transcripts or ""),
+            "transcript_confidence": transcripts_confidence,
+            "words": list(words or []),
+            "words_confidence": list(words_confidence or []),
+            "error": str(err_msg or ""),
+            "google_credentials_configured": bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")),
+        }
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+        PRINT("\n-Trinitty:STT debug saved:%s" % json_path)
+        return json_path
+    except Exception as e:
+        Log_Error("Save_STT_Debug", e)
+        return ""
 
 
 def signal_handler(_sig, _frame):
@@ -985,14 +1356,46 @@ STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
 STT_BAD_WORD_RATIO_MAX = 0.25
 STT_BAD_WORD_COUNT_MAX = 2
+STT_DEBUG = False
+STT_DEBUG_DIR = "logs/stt"
+STT_LOCAL_FALLBACK_ENABLED = False
+STT_LOCAL_MODEL_PATH = "models/vosk-model-small-fr-0.22"
 GOOGLE_STT_TIMEOUT = 20.0
 GOOGLE_LANGUAGE_TIMEOUT = 8.0
+WEB_SEARCH_TIMEOUT = 10.0
+READ_LINK_TIMEOUT = 10.0
+PYPI_VERSION_TIMEOUT = 5.0
+GPT4FREE_PROBE_TIMEOUT = 15.0
+TTS_CACHE_ENABLED = True
+TTS_CACHE_DIR = "cache/tts"
+RESPONSE_STREAMING_ENABLED = True
+RESPONSE_STREAM_MIN_CHARS = 120
+RESPONSE_STREAM_MAX_CHARS = 450
+TTS_PARALLEL_WORKERS = 1
+HISTORY_INDEX_ENABLED = True
+HISTORY_INDEX_PATH = "cache/history_index.json"
 HISTORY_CLASSIFICATION_ENABLED = True
 RESULTS_HUB_MAX_ATTEMPTS = 2
 RESULTS_HUB_CONTINUE = object()
 WAIT_TIMEOUT = object()
 GPT4FREE_COOKIES_LOADED = False
 GPT4FREE_RUNTIME_AVAILABLE = None
+OPENAI_CLIENT = None
+OPENAI_CLIENT_CONFIG = None
+GOOGLE_SPEECH_CLIENT = None
+GOOGLE_TTS_CLIENT = None
+GOOGLE_LANGUAGE_CLIENT = None
+VOSK_MODEL = None
+COMMAND_REGISTRY_READY = False
+SPACY_NLP = None
+SPACY_NLP_MODEL = None
+FRENCH_STOP_WORDS = None
+WORDNET_LEMMATIZER = None
+PREPROCESS_CACHE = OrderedDict()
+PREPROCESS_CACHE_MAX = 512
+HISTORY_INDEX_CACHE = None
+HISTORY_INDEX_SIGNATURE = None
+COMMAND_TRIGGER_INDEX = {}
 
 
 def Queue_Get_Optional(queue_obj, timeout=0.2, default=QUEUE_MISSING):
@@ -1294,6 +1697,16 @@ def To_Gpt(input, wait_audio=None):
 
     last_sentence.put(input)
 
+    if Config_Bool(globals().get("RESPONSE_STREAMING_ENABLED", True), default=True):
+        streamed = Text_To_Speech_Streamed(
+            Openai_Gpt_Stream(input),
+            stayawake=False,
+            savehistory=True,
+            before_first_play=stop_wait_audio,
+        )
+        if streamed is not None:
+            return streamed
+
     openai_response = Openai_Gpt(input)
     if openai_response:
         stop_wait_audio()
@@ -1471,6 +1884,20 @@ def Openai_Response_Text(response):
     return "\n".join(texts).strip()
 
 
+def Openai_Request(input):
+    model = str(globals().get("OPENAI_MODEL", "gpt-5.5")).strip() or "gpt-5.5"
+    instructions = str(
+        globals().get("OPENAI_INSTRUCTIONS", "Reponds en francais de facon concise et naturelle.")
+    ).strip()
+    request = {
+        "model": model,
+        "input": str(input),
+    }
+    if instructions and instructions.lower() not in ["none", "false"]:
+        request["instructions"] = instructions
+    return request
+
+
 def Openai_Gpt(input):
     if not Openai_Config_Bool(globals().get("OPENAI_ENABLED", True), default=True):
         PRINT("\n-Trinitty:OpenAI disabled by OPENAI_ENABLED.")
@@ -1481,25 +1908,14 @@ def Openai_Gpt(input):
         PRINT("\n-Trinitty:OpenAI token missing, using gpt4free fallback.")
         return ""
 
-    model = str(globals().get("OPENAI_MODEL", "gpt-5.5")).strip() or "gpt-5.5"
-    instructions = str(
-        globals().get("OPENAI_INSTRUCTIONS", "Reponds en francais de facon concise et naturelle.")
-    ).strip()
     try:
         timeout = float(globals().get("OPENAI_TIMEOUT", 30))
     except Exception:
         timeout = 30
 
     try:
-        client = OpenAI(api_key=api_key, timeout=timeout)
-        request = {
-            "model": model,
-            "input": str(input),
-        }
-        if instructions and instructions.lower() not in ["none", "false"]:
-            request["instructions"] = instructions
-
-        response = client.responses.create(**request)
+        client = Get_OpenAI_Client(api_key=api_key, timeout=timeout)
+        response = client.responses.create(**Openai_Request(input))
         response_text = Openai_Response_Text(response)
         if not response_text:
             print("\n-Trinitty:OpenAI API error, using gpt4free fallback:empty OpenAI response")
@@ -1509,6 +1925,94 @@ def Openai_Gpt(input):
     except Exception as e:
         print("\n-Trinitty:OpenAI API error, using gpt4free fallback:%s" % str(e))
         return ""
+
+
+def Openai_Stream_Event_Text(event):
+    if isinstance(event, dict):
+        for key in ["delta", "text", "output_text"]:
+            value = event.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return ""
+
+    for attr in ["delta", "text", "output_text"]:
+        value = getattr(event, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def Response_Stream_Cut(buffer, force=False):
+    buffer = str(buffer or "")
+    if not buffer.strip():
+        return ("", "")
+
+    min_chars = max(1, int(globals().get("RESPONSE_STREAM_MIN_CHARS", 120)))
+    max_chars = max(min_chars, int(globals().get("RESPONSE_STREAM_MAX_CHARS", 450)))
+
+    if not force and len(buffer) < min_chars:
+        return ("", buffer)
+
+    search_limit = min(len(buffer), max_chars)
+    punctuation = [buffer.rfind(char, 0, search_limit) for char in [".", "!", "?", "\n", ";", ":"]]
+    cut = max(punctuation)
+    if cut >= min_chars:
+        cut += 1
+    elif len(buffer) >= max_chars:
+        cut = buffer.rfind(" ", 0, max_chars)
+        if cut < min_chars:
+            cut = max_chars
+    elif force:
+        cut = len(buffer)
+    else:
+        return ("", buffer)
+
+    segment = buffer[:cut].strip()
+    remainder = buffer[cut:].lstrip()
+    return (segment, remainder)
+
+
+def Openai_Gpt_Stream(input):
+    if not Openai_Config_Bool(globals().get("OPENAI_ENABLED", True), default=True):
+        PRINT("\n-Trinitty:OpenAI disabled by OPENAI_ENABLED.")
+        return
+
+    api_key = Openai_Load_Key()
+    if not api_key:
+        PRINT("\n-Trinitty:OpenAI token missing, using gpt4free fallback.")
+        return
+
+    timeout = Config_Positive_Float(globals().get("OPENAI_TIMEOUT", 30.0), 30.0)
+    client = Get_OpenAI_Client(api_key=api_key, timeout=timeout)
+    buffer = ""
+    emitted = []
+
+    with client.responses.stream(**Openai_Request(input), timeout=timeout) as stream:
+        for event in stream:
+            delta = Openai_Stream_Event_Text(event)
+            if not delta:
+                continue
+            buffer += delta
+            while True:
+                segment, buffer = Response_Stream_Cut(buffer)
+                if not segment:
+                    break
+                emitted.append(segment)
+                yield segment
+
+        try:
+            final_text = Openai_Response_Text(stream.get_final_response())
+        except Exception:
+            final_text = ""
+        if final_text and not emitted and not buffer:
+            buffer = final_text
+
+    while buffer.strip():
+        segment, buffer = Response_Stream_Cut(buffer, force=True)
+        if not segment:
+            break
+        emitted.append(segment)
+        yield segment
 
 
 def Extract_First_Url(text):
@@ -1630,10 +2134,13 @@ def Gpt4free_Cookies_Dir():
 def Gpt4free_Cookie_Capture_Source_Dir():
     configured = str(globals().get("GPT4FREE_COOKIES_SYNC_DIR", "") or "").strip()
     if configured:
+        configured = os.path.expandvars(os.path.expanduser(configured))
         if os.path.isabs(configured):
             return configured
+        if configured.startswith("g4f_cookies"):
+            return User_Data_Path(configured)
         return os.path.join(globals().get("SCRIPT_PATH", "."), configured)
-    return os.path.join(globals().get("SCRIPT_PATH", "."), "tools", "har_and_cookies")
+    return User_Data_Path("g4f_cookies", "import")
 
 
 def Sync_Gpt4free_Cookie_Captures(source_dir=None, dest_dir=None):
@@ -2128,8 +2635,8 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True, 
 
             try:
 
-                client = tts.TextToSpeechClient()
-                audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16)
+                client = Get_Google_TTS_Client()
+                audio_config = Tts_Audio_Config()
 
                 text_input = tts.SynthesisInput(text=tx)
                 voice_params = tts.VoiceSelectionParams(language_code="fr-FR", name="fr-FR-Neural2-A")
@@ -3096,6 +3603,7 @@ def Load_Csv():
     global Loaded_Verbs_Words_List
     global Loaded_Synonyms_Words_List
     global Loaded_Mix_Functions_verbs
+    global COMMAND_REGISTRY_READY
 
     Loaded_History_List = []
     Loaded_Trinitty_Name_Requests = []
@@ -3126,55 +3634,7 @@ def Load_Csv():
 
     PRINT("\n-Trinitty:Dans la fonction Load_Csv .")
 
-    hist_folder = History_Dir()
-    if os.path.exists(hist_folder):
-        hist_files = [f for f in os.listdir(hist_folder)]
-        for file in hist_files:
-            filepath = os.path.join(hist_folder, file)
-            try:
-                with open(filepath, newline="") as csvfile:
-                    reader = csv.DictReader(csvfile)
-                    for row in reader:
-                        try:
-                            hist_file = row["hist_file"]
-                            hist_cats = row["hist_cats"]
-                            hist_input_full = row["hist_input_full"]
-                            hist_input_short = row["hist_input_short"]
-                            hist_input_wav = row["hist_input_wav"]
-                            hist_output = row["hist_output"]
-                            hist_output_wav = row["hist_output_wav"]
-                            hist_urls = row["hist_urls"]
-                            hist_epok = row["hist_epok"]
-                            hist_tstamp = row["hist_tstamp"]
-                            Loaded_History_List.append(
-                                {
-                                    "hist_file":hist_file,
-                                    "hist_cats":hist_cats,
-                                    "hist_input_full":hist_input_full,
-                                    "hist_input_short":hist_input_short,
-                                    "hist_input_wav":hist_input_wav,
-                                    "hist_output":hist_output,
-                                    "hist_output_wav":hist_output_wav,
-                                    "hist_urls":hist_urls,
-                                    "hist_epok":hist_epok,
-                                    "hist_tstamp":hist_tstamp,
-                                }
-                            )
-
-
-                        except Exception as e:
-                            print("\n-Trinitty:Error:loadcsv:file:%s %s" % (filepath, str(e)))
-            #                      print("\nhist_file:\n",hist_file)
-            #                      print("hist_cats:\n",hist_cats)
-            #                      print("hist_txt:\n",hist_txt)
-            #                      print("hist_answer:\n",hist_answer)
-            #                      print("hist_epok:\n",hist_epok)
-            #                      print("hist_tstamp:\n",hist_tstamp)
-            #                      print("hist_wav:\n",hist_wav)
-            except Exception as e:
-                print("\n-Trinitty:Error:loadcsv:file:%s %s" % (filepath, str(e)))
-
-    PRINT("\n-Trinitty:Loaded_History_List Loaded")
+    PRINT("\n-Trinitty:Loaded_History_List deferred to history index")
 
     if os.path.exists(SYNFILE):
         with open(SYNFILE, newline="") as f:
@@ -3895,6 +4355,8 @@ def Load_Csv():
         return Missing_Runtime_File(ALTFILE)
 
     PRINT("\n-Trinitty:ALTFILE Loaded")
+    Compile_Command_Trigger_Index()
+    COMMAND_REGISTRY_READY = True
     return True
 #    for his in Loaded_History_List:
 #        print(his)
@@ -4239,7 +4701,7 @@ def Add_Trigger(trigger_input=None, func_name_to_add=None, specific_trigger=None
 
             try:
 
-                client = tts.TextToSpeechClient()
+                client = Get_Google_TTS_Client()
                 audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16)
 
                 text_input = tts.SynthesisInput(text=tx)
@@ -4461,11 +4923,73 @@ def Get_Line():
         return 0
 
 
+def Trigger_Index_Token(text):
+    for token in re.split(r"\W+", str(text or "").replace("*", " ")):
+        token = token.strip()
+        if token:
+            return token
+    return ""
+
+
+def Build_Trigger_List_Index(list_elements):
+    indexed = {}
+    for element in list_elements:
+        first_token = Trigger_Index_Token(element)
+        indexed.setdefault(first_token, []).append(element)
+    return {"size": len(list_elements), "index": indexed}
+
+
+def Trigger_List_Candidates(var_to_check, list_elements):
+    cache_key = id(list_elements)
+    cached = COMMAND_TRIGGER_INDEX.get(cache_key)
+    if cached is None or cached.get("size") != len(list_elements):
+        cached = Build_Trigger_List_Index(list_elements)
+        COMMAND_TRIGGER_INDEX[cache_key] = cached
+
+    tokens = set(re.split(r"\W+", str(var_to_check or "")))
+    candidates = []
+    index = cached.get("index", {})
+    for token in tokens:
+        if token:
+            candidates.extend(index.get(token, []))
+    candidates.extend(index.get("", []))
+    return list(dict.fromkeys(candidates)) or list_elements
+
+
+def Compile_Command_Trigger_Index():
+    COMMAND_TRIGGER_INDEX.clear()
+    for command_list in [
+        Loaded_Actions_Words_Requests,
+        Loaded_Alternatives_Triggers,
+        Loaded_Add_Triggers_Requests,
+        Loaded_Trinitty_Name_Requests,
+        Loaded_Trinitty_Mean_Requests,
+        Loaded_Trinitty_Dev_Requests,
+        Loaded_Trinitty_Script_Requests,
+        Loaded_Trinitty_Help_Requests,
+        Loaded_Prompt_Requests,
+        Loaded_Rnd_Requests,
+        Loaded_Repeat_Requests,
+        Loaded_Show_History_Requests,
+        Loaded_Search_History_Requests,
+        Loaded_Delete_Last_History_Requests,
+        Loaded_Search_Web_Requests,
+        Loaded_Read_Link_Requests,
+        Loaded_Play_Audio_File_Requests,
+        Loaded_Wait_Words_Requests,
+        Loaded_Quit_Words_Requests,
+        Loaded_Sort_Results_Requests,
+        Loaded_Read_Results,
+    ]:
+        COMMAND_TRIGGER_INDEX[id(command_list)] = Build_Trigger_List_Index(command_list)
+    return COMMAND_TRIGGER_INDEX
+
+
 def SeeknReturn(var_to_check, list_elements):
     #          PRINT("\n-Trinitty:Dans la fonction seeknreturn")
     final_found = []
     found_lst = []
-    for element in list_elements:
+    for element in Trigger_List_Candidates(var_to_check, list_elements):
         if "*" in element:
             splited = element.split("*")
             all_inside = all(e in var_to_check for e in splited)
@@ -5440,7 +5964,10 @@ def Fallback_Search_Sources(to_search):
 
 
 def Fetch_Fallback_Search_Source(source):
-    kwargs = {"headers": SEARCH_HTTP_HEADERS, "timeout": 10}
+    kwargs = {
+        "headers": SEARCH_HTTP_HEADERS,
+        "timeout": Config_Positive_Float(globals().get("WEB_SEARCH_TIMEOUT", 10.0), 10.0),
+    }
     if source["method"] == "post":
         return requests.post(source["url"], data=source.get("data", {}), **kwargs)
     return requests.get(source["url"], params=source.get("params", {}), **kwargs)
@@ -5513,11 +6040,11 @@ def Fallback_Web_Search(to_search, rnbr=10, site=None):
     for source in Fallback_Search_Sources(to_search):
         try:
             response = Fetch_Fallback_Search_Source(source)
+            PRINT(
+                "\n-Trinitty:Fallback web search provider:%s status:%s"
+                % (source["name"], response.status_code)
+            )
             if response.status_code != 200:
-                PRINT(
-                    "\n-Trinitty:Fallback web search %s status:%s"
-                    % (source["name"], response.status_code)
-                )
                 continue
 
             results = Extract_Fallback_Search_Results(
@@ -5526,11 +6053,14 @@ def Fallback_Web_Search(to_search, rnbr=10, site=None):
                 rnbr=rnbr,
                 site=site,
             )
+            PRINT(
+                "\n-Trinitty:Fallback web search provider:%s parsed_results:%s"
+                % (source["name"], len(results))
+            )
             if results:
                 for result in results:
                     PRINT("\n-Trinitty:fallback_web_result:", result["google_title"])
                 return results
-            PRINT("\n-Trinitty:Fallback web search %s no parsed result" % source["name"])
         except Exception as e:
             Log_Error("Fallback_Web_Search:%s" % source["name"], e)
             PRINT("\n-Trinitty:Fallback web search %s Error:%s" % (source["name"], str(e)))
@@ -5562,7 +6092,10 @@ def GetTitleLink(txt, site=None):
                 quote_plus(txt),
             )
 
-            response = requests.get(google_query, timeout=10)
+            response = requests.get(
+                google_query,
+                timeout=Config_Positive_Float(globals().get("WEB_SEARCH_TIMEOUT", 10.0), 10.0),
+            )
 
             if response.status_code != 200:
                 SearchFallback = True
@@ -5763,6 +6296,46 @@ def Google_Result_Description(result):
         return ""
 
 
+def Search_Query_Wants_Guide(query):
+    normalized = Normalize_Search_Query_Text(query)
+    return bool(
+        re.search(
+            r"\b(comment|guide|tuto|tutoriel|astuce|solution|strategie|battre|vaincre|reussir|faire|how|walkthrough)\b",
+            normalized,
+        )
+    )
+
+
+def Search_Result_Score(result, query):
+    title = Normalize_Search_Query_Text(result.get("google_title", ""))
+    description = Normalize_Search_Query_Text(result.get("google_description", ""))
+    url = Normalize_Search_Query_Text(result.get("google_url", ""))
+    combined = "%s %s %s" % (title, description, url)
+    score = 0
+
+    if Search_Query_Wants_Guide(query):
+        if re.search(r"\b(guide|tuto|tutoriel|astuce|solution|strategie|wiki|walkthrough|comment)\b", combined):
+            score += 40
+        if re.search(r"\b(amazon|boutique|shop|shopping|ebay|aliexpress|etsy|lego|fnac|cdiscount|rakuten)\b", url):
+            score -= 80
+        if re.search(r"\b(prix|acheter|vente|occasion|promo|panier|livraison)\b", combined):
+            score -= 50
+
+    if "wikipedia.org" in url or ".wiki" in url:
+        score += 15
+    return score
+
+
+def Rank_Search_Results(results, query):
+    if not results:
+        return []
+    scored = [(Search_Result_Score(result, query), index, result) for index, result in enumerate(results)]
+    demoted = sum(1 for score, _index, _result in scored if score < 0)
+    ranked = [result for _score, _index, result in sorted(scored, key=lambda item: (-item[0], item[1]))]
+    PRINT("\n-Trinitty:Web ranking:results:%s demoted:%s" % (len(results), demoted))
+    return ranked
+
+
 def Google_Custom_Search_Query(to_search, start=1, site_search="", sort_by_date=False):
     sort_param = "&sort=date" if sort_by_date else ""
     return "https://www.googleapis.com/customsearch/v1?key=%s&cx=%s&q=%s%s%s&start=%s" % (
@@ -5798,7 +6371,10 @@ def ReadLink(txtinput=None, titleinput=None, urlinput=None):
 
         try:
 
-            response = requests.get(urlinput, timeout=10)
+            response = requests.get(
+                urlinput,
+                timeout=Config_Positive_Float(globals().get("READ_LINK_TIMEOUT", 10.0), 10.0),
+            )
             soup = BeautifulSoup(response.text, "html.parser")
             text_data = ""
             for tag in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
@@ -5840,7 +6416,10 @@ def ReadLink(txtinput=None, titleinput=None, urlinput=None):
         #           else:
         try:
 
-            response = requests.get(urlinput, timeout=10)
+            response = requests.get(
+                urlinput,
+                timeout=Config_Positive_Float(globals().get("READ_LINK_TIMEOUT", 10.0), 10.0),
+            )
             soup = BeautifulSoup(response.text, "html.parser")
             text_data = ""
             for tag in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
@@ -5892,7 +6471,10 @@ def Google(to_search, rnbr=50,wiki_failed=False):  # ,tstmode = True):
                     sort_by_date=globals().get("GOOGLE_SORT_BY_DATE", False),
                 )
 
-                response = requests.get(google_query, timeout=10)
+                response = requests.get(
+                    google_query,
+                    timeout=Config_Positive_Float(globals().get("WEB_SEARCH_TIMEOUT", 10.0), 10.0),
+                )
 
                 if response.status_code != 200:
                     SearchFallback = True
@@ -5943,6 +6525,7 @@ def Google(to_search, rnbr=50,wiki_failed=False):  # ,tstmode = True):
             Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_result_google.wav")
             return ()
 
+    google_result = Rank_Search_Results(google_result, to_search)
     top20 = google_result[:20]
 
     return(Results_Hub(google_result,top20,from_function="Google"))
@@ -6348,7 +6931,7 @@ def Question(txt):
     score = 0
     try:
 
-        client = language_v1.LanguageServiceClient()
+        client = Get_Google_Language_Client()
         document = language_v1.Document(content=txt, language="fr", type_=language_v1.Document.Type.PLAIN_TEXT)
         sentiment = client.analyze_sentiment(request={"document": document}).document_sentiment
 
@@ -6428,8 +7011,11 @@ def Bad_Stt(txt):
     os.makedirs(os.path.dirname(fname), exist_ok=True)
     try:
 
-        client = tts.TextToSpeechClient()
-        audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16)
+        if Try_Load_Tts_Cache(txt, fname, provider="google"):
+            return Play_Audio_File(fname)
+
+        client = Get_Google_TTS_Client()
+        audio_config = Tts_Audio_Config()
 
         text_input = tts.SynthesisInput(text=txt)
         voice_params = tts.VoiceSelectionParams(language_code="fr-FR", name="fr-FR-Neural2-A")
@@ -6440,6 +7026,7 @@ def Bad_Stt(txt):
         try:
             with open(fname, "wb") as out:
                 out.write(audio_response)
+            Save_Tts_Cache(txt, fname, provider="google")
         except Exception as e:
             PRINT("\n-Trinitty:Error:", str(e))
             Log_Error("Bad_Stt:write", e)
@@ -6448,7 +7035,9 @@ def Bad_Stt(txt):
     except Exception as e:
         PRINT("\n-Trinitty:Error:%s" % str(e))
         try:
-            Run_Pico2Wave(fname, txt)
+            if not Try_Load_Tts_Cache(txt, fname, provider="pico2wave", voice="fr-FR"):
+                Run_Pico2Wave(fname, txt)
+                Save_Tts_Cache(txt, fname, provider="pico2wave", voice="fr-FR")
         except Exception as e:
             PRINT("\n-Trinitty:Error:", str(e))
             Log_Error("Bad_Stt:pico2wave", e)
@@ -6608,6 +7197,9 @@ def Speech_To_Text(audio):
     PRINT("\n-Trinitty:Dans la fonction Speech_To_Text")
 
     Err_msg = ""
+    provider = "google"
+    started = time.monotonic()
+    google_stt = None
     try:
         stt_timeout = Config_Positive_Float(globals().get("GOOGLE_STT_TIMEOUT", 20.0), 20.0)
         PRINT("\n-Trinitty:Speech_To_Text timeout:%s" % stt_timeout)
@@ -6617,7 +7209,7 @@ def Speech_To_Text(audio):
         )
         with Runtime_Timeout(stt_timeout, "Google Speech-to-Text"):
             PRINT("\n-Trinitty:Speech_To_Text init Google client")
-            client = speech.SpeechClient()
+            client = Get_Google_Speech_Client()
             to_txt = speech.RecognitionAudio(content=audio)
             config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -6634,7 +7226,6 @@ def Speech_To_Text(audio):
         Err_msg = "Speech_To_Text:" + str(e)
         Log_Error("Speech_To_Text", e)
         PRINT("\n-Trinitty:Error:%s" % str(e))
-    #    PRINT("google_stt %s:\n%s"%(type(google_stt),google_stt))
 
     transcripts = ""
     transcripts_confidence = 0
@@ -6654,10 +7245,79 @@ def Speech_To_Text(audio):
         except Exception as e:
             PRINT("\n-Trinitty:Error:%s" % str(e))
 
+    if Err_msg:
+        local_transcripts, local_confidence, local_words, local_words_confidence, local_err = Local_STT_Fallback(audio)
+        if local_transcripts:
+            provider = "vosk"
+            transcripts = local_transcripts
+            transcripts_confidence = local_confidence
+            words = local_words
+            words_confidence = local_words_confidence
+            Err_msg = ""
+        elif local_err:
+            Err_msg = "%s; %s" % (Err_msg, local_err)
+
     if len(transcripts) > 0:
         print("\n-Trinitty:User said:", transcripts)
 
+    Save_STT_Debug(
+        audio,
+        provider,
+        time.monotonic() - started,
+        transcripts,
+        transcripts_confidence,
+        words,
+        words_confidence,
+        Err_msg,
+    )
     return (transcripts, transcripts_confidence, words, words_confidence, Err_msg)
+
+
+def Tts_Audio_Config():
+    try:
+        return tts.AudioConfig(
+            audio_encoding=tts.AudioEncoding.LINEAR16,
+            sample_rate_hertz=24000,
+        )
+    except TypeError:
+        return tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16)
+
+
+def Synthesize_Text_To_Wav(text, output_path, voice="fr-FR-Neural2-A"):
+    text = str(text or "").strip()
+    if not text:
+        return False
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    if Try_Load_Tts_Cache(text, output_path, provider="google", voice=voice):
+        return True
+
+    for attempt in range(2):
+        try:
+            client = Get_Google_TTS_Client()
+            response = client.synthesize_speech(
+                input=tts.SynthesisInput(text=text),
+                voice=tts.VoiceSelectionParams(language_code="fr-FR", name=voice),
+                audio_config=Tts_Audio_Config(),
+            )
+            with open(output_path, "wb") as out:
+                out.write(response.audio_content)
+            Save_Tts_Cache(text, output_path, provider="google", voice=voice)
+            return True
+        except Exception as e:
+            PRINT("\n-Trinitty:Synthesize_Text_To_Wav google error:%s" % str(e))
+            if attempt == 0:
+                time.sleep(0.5)
+
+    try:
+        if not Try_Load_Tts_Cache(text, output_path, provider="pico2wave", voice="fr-FR"):
+            Run_Pico2Wave(output_path, text)
+            Save_Tts_Cache(text, output_path, provider="pico2wave", voice="fr-FR")
+        return os.path.exists(output_path)
+    except Exception as e:
+        PRINT("\n-Trinitty:Synthesize_Text_To_Wav pico2wave error:%s" % str(e))
+        Log_Error("Synthesize_Text_To_Wav:pico2wave", e)
+        return False
 
 
 def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
@@ -6702,58 +7362,17 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
     Err_Concatenation = False
 
     for n, txt in enumerate(txt_list):
-        time.sleep(0.5)
         leadn = str(n).zfill(4)
         #        if len(txt_list) > 1:
         #                fname = "/tmp/answer"+str(leadn)+".wav"
         #        else:
         #                fname = "/tmp/current_answer.wav"
         fname = Runtime_Tmp_Path("answer" + str(leadn) + ".wav")
-        Err_cnt = 0
-        while True:
-            Retry = False
-            try:
-
-                client = tts.TextToSpeechClient()
-                audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16)
-
-                text_input = tts.SynthesisInput(text=txt)
-                voice_params = tts.VoiceSelectionParams(language_code="fr-FR", name="fr-FR-Neural2-A")
-
-                response = client.synthesize_speech(input=text_input, voice=voice_params, audio_config=audio_config)
-                audio_response = response.audio_content
-
-                try:
-                    with open(fname, "wb") as out:
-                        out.write(audio_response)
-                    wav_list.append(fname)
-                except Exception as e:
-                    PRINT("\n-Trinitty:Error:", str(e))  # TODO
-                    #                     err_list.append("Err_cnt:%s write(gtss)file:%s err:%s"%(str(Err_cnt),SCRIPT_PATH+fname,str(e)))
-                    Err_cnt += 1
-                    Retry = True
-
-            except Exception as e:
-                PRINT("\n-Trinitty:Error:%s" % str(e))
-                Err_cnt += 1
-                Retry = True
-
-            if Err_cnt == 2:
-                Err_Tts = True
-                Err_cnt = 0
-                try:
-                    Run_Pico2Wave(fname, txt)
-                    # RESAMPLE 16000 to 24000
-                    wav_list.append(fname)
-                    Retry = False
-                except Exception as e:
-                    PRINT("\n-Trinitty:Error:", str(e))
-                    Retry = False
-                    Err_Skip = True
-
-            if not Retry:
-                break
-            time.sleep(0.5)
+        if Synthesize_Text_To_Wav(txt, fname):
+            wav_list.append(fname)
+            continue
+        Err_Tts = True
+        Err_Skip = True
 
     for f in wav_list:
         if os.path.exists(f):
@@ -6790,12 +7409,10 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
             Err_Concatenation = True
     elif len(to_sox) == 1:
         try:
-            sample = sox.Transformer()
-            sample.set_output_format(rate=24000)
-            sample.build(to_sox[0], final_wav)
+            copyfile(to_sox[0], final_wav)
         except Exception as e:
             PRINT("\n-Trinitty:to_sox:\n%s" % to_sox[0])
-            print("\n-Trinitty:Error:pysox:", str(e))
+            print("\n-Trinitty:Error:copy final wav:", str(e))
             Err_Pysox = True
 
     if Err_Tts:
@@ -6890,6 +7507,76 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
 #    return(Play_Response(audio_response=final_wav,stay_awake=stayawake,save_history=savehistory,answer_txt=txtinput))
 
 
+def Concatenate_Wav_Files(wav_files, output_path):
+    wav_files = [str(path) for path in wav_files if path and os.path.exists(path)]
+    if not wav_files:
+        return False
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    if len(wav_files) == 1:
+        copyfile(wav_files[0], output_path)
+        return True
+    try:
+        cbn = sox.Combiner()
+        cbn.convert(samplerate=24000, n_channels=1)
+        try:
+            cbn.set_input_format(file_type=["wav" for _path in wav_files])
+        except Exception as e:
+            PRINT("\n-Trinitty:Concatenate_Wav_Files:set_input_format:%s" % str(e))
+        cbn.build(wav_files, output_path, "concatenate")
+        return os.path.exists(output_path)
+    except Exception as e:
+        Log_Error("Concatenate_Wav_Files", e)
+        PRINT("\n-Trinitty:Concatenate_Wav_Files:Error:%s" % str(e))
+        return False
+
+
+def Text_To_Speech_Streamed(segment_iter, stayawake=False, savehistory=True, before_first_play=None):
+    PRINT("\n-Trinitty:Dans la fonction Text_To_Speech_Streamed")
+
+    played_any = False
+    segments = []
+    wav_files = []
+    os.makedirs(Runtime_Tmp_Path(), exist_ok=True)
+
+    try:
+        for index, raw_segment in enumerate(segment_iter):
+            segment = parse_response(str(raw_segment or "")).strip()
+            if not segment:
+                continue
+            wav_path = Runtime_Tmp_Path("stream_answer%s.wav" % str(index).zfill(4))
+            if not Synthesize_Text_To_Wav(segment, wav_path):
+                PRINT("\n-Trinitty:Text_To_Speech_Streamed:TTS segment skipped:%s" % index)
+                continue
+            segments.append(segment)
+            wav_files.append(wav_path)
+            if not played_any and callable(before_first_play):
+                before_first_play()
+            played_any = True
+            Play_Audio_File_With_Interrupt(wav_path)
+    except Exception as e:
+        Log_Error("Text_To_Speech_Streamed", e)
+        PRINT("\n-Trinitty:Text_To_Speech_Streamed:Error:%s" % str(e))
+        if not played_any:
+            return None
+
+    if not segments:
+        return None
+
+    answer_txt = " ".join(segments).strip()
+    final_wav = Runtime_Tmp_Path("current_answer.wav")
+    wav_ready = Concatenate_Wav_Files(wav_files, final_wav)
+
+    if savehistory:
+        if wav_ready:
+            Save_History(answer_txt)
+        else:
+            Save_History(answer_txt, no_audio=True)
+
+    if not stayawake:
+        return Go_Back_To_Sleep(True)
+    return True
+
+
 def Audio_File_Is_Playable(filepath):
     return str(filepath or "").lower().endswith((".wav", ".mp3", ".ogg", ".flac"))
 
@@ -6924,7 +7611,6 @@ def Playback_Stop_Command_Detected(text):
 def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
     if (
         globals().get("INTERPRETOR", False)
-        or globals().get("PUSH_TO_TALK", False)
         or (not force and not globals().get("PLAYBACK_INTERRUPT_ENABLED", False))
     ):
         return False
@@ -6961,7 +7647,6 @@ def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
 def Start_Playback_Interrupt_Listener(force=False):
     if (
         globals().get("INTERPRETOR", False)
-        or globals().get("PUSH_TO_TALK", False)
         or (not force and not globals().get("PLAYBACK_INTERRUPT_ENABLED", False))
     ):
         return None
@@ -7177,15 +7862,19 @@ def get_wordnet_pos(treebank_tag):
 
 def preprocess(txt,Isolate_Search=False):
     _ = Isolate_Search
+    cache_key = str(txt or "")
+    cached = Cached_Preprocess_Get(cache_key)
+    if cached is not None:
+        return cached
     sentence = unidecode(txt)
     sentence = sentence.lower()
     sentence = "".join(char for char in sentence if char not in string.punctuation)
     tokens = word_tokenize(sentence)
-    stop_words = set(stopwords.words("french"))
+    stop_words = French_Stop_Words()
     tokens = [word for word in tokens if word.isalnum() and word not in stop_words]
-    lemmatizer = WordNetLemmatizer()
+    lemmatizer = Wordnet_Lemmatizer()
     tokens = [lemmatizer.lemmatize(word, get_wordnet_pos(tag)) for word, tag in pos_tag(tokens)]
-    return " ".join(tokens)
+    return Cached_Preprocess_Set(cache_key, " ".join(tokens))
 
 def Quit(from_function=None):
 
@@ -7351,7 +8040,7 @@ def Isolate_Search(txt, function_name):
        return(" ".join(clean_request))
 
 
-    nlp = spacy.load(globals().get("SPACY_MODEL", "fr_core_news_md"))
+    nlp = Get_Spacy_Nlp()
     doc = nlp(txt)
     tokenizer = nlp.tokenizer
 
@@ -8097,8 +8786,175 @@ def Results_Hub(original_result,topx_res=None,from_function=None):
 
     return Go_Back_To_Sleep(go_trinitty=True)
 
+
+def History_Index_Path():
+    return Runtime_User_Path(globals().get("HISTORY_INDEX_PATH", "cache/history_index.json"), ("cache", "history_index.json"))
+
+
+def History_Source_Signature():
+    history_dir = History_Dir()
+    signature = []
+    if not os.path.isdir(history_dir):
+        return signature
+    for name in sorted(os.listdir(history_dir)):
+        if name.startswith("."):
+            continue
+        path = os.path.join(history_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        signature.append({"name": name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
+    return signature
+
+
+def History_Row_For_Index(row):
+    indexed = {field: row.get(field, "") for field in History_Fieldnames()}
+    search_text = " ".join(
+        [
+            indexed.get("hist_input_full", ""),
+            indexed.get("hist_input_short", ""),
+            indexed.get("hist_output", ""),
+        ]
+    )
+    normalized = Normalize_History_Search_Text(search_text)
+    indexed["_search_text"] = normalized
+    indexed["_search_tokens"] = sorted(set(normalized.split()))
+    return indexed
+
+
+def Read_History_Files():
+    rows = []
+    hist_folder = History_Dir()
+    if not os.path.exists(hist_folder):
+        return rows
+    for file in sorted(os.listdir(hist_folder)):
+        if file.startswith("."):
+            continue
+        filepath = os.path.join(hist_folder, file)
+        if not os.path.isfile(filepath):
+            continue
+        try:
+            with open(filepath, newline="") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    try:
+                        rows.append(History_Row_For_Index(row))
+                    except Exception as e:
+                        print("\n-Trinitty:Error:load history row:%s %s" % (filepath, str(e)))
+        except Exception as e:
+            print("\n-Trinitty:Error:load history file:%s %s" % (filepath, str(e)))
+    return rows
+
+
+def Load_History_Index_File(signature):
+    if not Config_Bool(globals().get("HISTORY_INDEX_ENABLED", True), default=True):
+        return None
+    index_path = History_Index_Path()
+    if not os.path.isfile(index_path):
+        return None
+    try:
+        with open(index_path, encoding="utf-8") as f:
+            payload = json.load(f)
+        if payload.get("signature") != signature:
+            return None
+        rows = payload.get("rows", [])
+        if not isinstance(rows, list):
+            return None
+        return [row if "_search_text" in row else History_Row_For_Index(row) for row in rows]
+    except Exception as e:
+        Log_Error("Load_History_Index_File", e)
+        return None
+
+
+def Save_History_Index_File(rows, signature):
+    if not Config_Bool(globals().get("HISTORY_INDEX_ENABLED", True), default=True):
+        return False
+    index_path = History_Index_Path()
+    try:
+        os.makedirs(os.path.dirname(index_path), exist_ok=True)
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump({"signature": signature, "rows": rows}, f, ensure_ascii=False)
+        return True
+    except Exception as e:
+        Log_Error("Save_History_Index_File", e)
+        return False
+
+
+def History_List_Is_Preloaded(rows):
+    if not rows:
+        return False
+    return any(isinstance(row, dict) and "_search_text" not in row for row in rows)
+
+
+def Ensure_History_Index_Loaded(force=False):
+    global Loaded_History_List, HISTORY_INDEX_CACHE, HISTORY_INDEX_SIGNATURE
+
+    signature = History_Source_Signature()
+    if not force and HISTORY_INDEX_CACHE is None and History_List_Is_Preloaded(Loaded_History_List):
+        HISTORY_INDEX_CACHE = [
+            row if "_search_text" in row else History_Row_For_Index(row)
+            for row in Loaded_History_List
+        ]
+        HISTORY_INDEX_SIGNATURE = signature
+        Loaded_History_List = HISTORY_INDEX_CACHE
+        return Loaded_History_List
+
+    if not force and HISTORY_INDEX_CACHE is not None and HISTORY_INDEX_SIGNATURE == signature:
+        Loaded_History_List = HISTORY_INDEX_CACHE
+        return Loaded_History_List
+
+    rows = None if force else Load_History_Index_File(signature)
+    if rows is None:
+        rows = Read_History_Files()
+        Save_History_Index_File(rows, signature)
+
+    HISTORY_INDEX_CACHE = rows
+    HISTORY_INDEX_SIGNATURE = signature
+    Loaded_History_List = rows
+    return Loaded_History_List
+
+
+def Update_History_Index_Row(row):
+    global Loaded_History_List, HISTORY_INDEX_CACHE, HISTORY_INDEX_SIGNATURE
+
+    indexed = History_Row_For_Index(row)
+    if HISTORY_INDEX_CACHE is None:
+        Ensure_History_Index_Loaded()
+    if HISTORY_INDEX_CACHE is None:
+        HISTORY_INDEX_CACHE = []
+    HISTORY_INDEX_CACHE.append(indexed)
+    Loaded_History_List = HISTORY_INDEX_CACHE
+    HISTORY_INDEX_SIGNATURE = History_Source_Signature()
+    Save_History_Index_File(HISTORY_INDEX_CACHE, HISTORY_INDEX_SIGNATURE)
+    return indexed
+
+
+def History_Candidates(lemmatized_question, cat_file, joined_cat, category_known):
+    rows = Ensure_History_Index_Loaded()
+    query_tokens = set(Normalize_History_Search_Text(lemmatized_question).split())
+    candidates = []
+
+    for row in rows:
+        if category_known and not (cat_file == row.get("hist_file") and joined_cat == row.get("hist_cats")):
+            continue
+        token_overlap = len(query_tokens.intersection(row.get("_search_tokens", []))) if query_tokens else 0
+        candidates.append((token_overlap, row))
+
+    if len(candidates) <= 200:
+        return [row for _score, row in candidates]
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    if candidates and candidates[0][0] > 0:
+        return [row for score, row in candidates[:200] if score > 0]
+    return [row for _score, row in candidates[:200]]
+
+
 def Show_History():
     PRINT("\n-Trinitty:Show_History()")
+    Ensure_History_Index_Loaded()
     if len(Loaded_History_List) == 0:
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_history.wav")
         return ()
@@ -8160,6 +9016,7 @@ def Write_History_File(filepath, rows):
 def Delete_Last_History_Entry():
     global Loaded_History_List
 
+    Ensure_History_Index_Loaded()
     candidates = []
     for index, entry in enumerate(Loaded_History_List):
         try:
@@ -8195,12 +9052,14 @@ def Delete_Last_History_Entry():
 
     Write_History_File(filepath, new_rows)
     del Loaded_History_List[index]
+    Ensure_History_Index_Loaded(force=True)
     PRINT("\n-Trinitty:Delete_Last_History_Entry:removed:%s" % target_epok)
     return True
 
 
 
 def Search_History(to_search):
+    Ensure_History_Index_Loaded()
     to_search = Clean_History_Search_Query(Isolate_Search(to_search,"F_search_history"))
 
     PRINT("\n-Trinitty:Dans la fonction SearchHistory to_search %s in history." % to_search)
@@ -8476,8 +9335,7 @@ def Save_History(answer, no_audio=False):
             )
 
             PRINT("\n-Trinitty:wrote history to:%s" % history_file)
-            Loaded_History_List.append(
-
+            Update_History_Index_Row(
                 {
                     "hist_file": Cat_File,
                     "hist_cats": Cat_List,
@@ -8521,7 +9379,7 @@ def Check_History(question, before_replay=None):
     Best_Answer = []
     Best_Wav = []
 
-    for args in Loaded_History_List:
+    for args in History_Candidates(lemmatized, Cat_File, Joined_Cat, category_known_before_check):
 
         hist_file = args["hist_file"]
         hist_cats = args["hist_cats"]
@@ -8628,7 +9486,7 @@ def Classify(text_content):
             % os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
         )
         with Runtime_Timeout(language_timeout, "Google Natural Language classify_text"):
-            client = language_v1.LanguageServiceClient()
+            client = Get_Google_Language_Client()
 
             type_ = language_v1.Document.Type.PLAIN_TEXT
             language = "fr"
@@ -8785,6 +9643,9 @@ def GetConf():
     global PUSH_TO_TALK
     global PLAYBACK_INTERRUPT_ENABLED
     global PLAYBACK_INTERRUPT_TIMEOUT
+    global WAIT_FOR_TIMEOUT
+    global WAIT_FOR_POLL_INTERVAL
+    global PLAYBACK_POLL_INTERVAL
     global COMMAND_CLASSIFIER_ENABLED
     global COMMAND_CLASSIFIER_THRESHOLD
     global COMMAND_CLASSIFIER_MODEL_PATH
@@ -8795,8 +9656,29 @@ def GetConf():
     global OPENAI_TIMEOUT
     global OPENAI_INSTRUCTIONS
     global SPACY_MODEL
+    global STT_TRANSCRIPT_CONFIDENCE_MIN
+    global STT_WORD_CONFIDENCE_MIN
+    global STT_AVG_WORD_CONFIDENCE_MIN
+    global STT_BAD_WORD_RATIO_MAX
+    global STT_BAD_WORD_COUNT_MAX
+    global STT_DEBUG
+    global STT_DEBUG_DIR
+    global STT_LOCAL_FALLBACK_ENABLED
+    global STT_LOCAL_MODEL_PATH
     global GOOGLE_STT_TIMEOUT
     global GOOGLE_LANGUAGE_TIMEOUT
+    global WEB_SEARCH_TIMEOUT
+    global READ_LINK_TIMEOUT
+    global PYPI_VERSION_TIMEOUT
+    global GPT4FREE_PROBE_TIMEOUT
+    global TTS_CACHE_ENABLED
+    global TTS_CACHE_DIR
+    global RESPONSE_STREAMING_ENABLED
+    global RESPONSE_STREAM_MIN_CHARS
+    global RESPONSE_STREAM_MAX_CHARS
+    global TTS_PARALLEL_WORKERS
+    global HISTORY_INDEX_ENABLED
+    global HISTORY_INDEX_PATH
     global HISTORY_CLASSIFICATION_ENABLED
     global GOOGLE_SORT_BY_DATE
     global CHECK_UPDATE
@@ -8812,6 +9694,9 @@ def GetConf():
         "PUSH_TO_TALK",
         "PLAYBACK_INTERRUPT_ENABLED",
         "PLAYBACK_INTERRUPT_TIMEOUT",
+        "WAIT_FOR_TIMEOUT",
+        "WAIT_FOR_POLL_INTERVAL",
+        "PLAYBACK_POLL_INTERVAL",
         "COMMAND_CLASSIFIER_ENABLED",
         "COMMAND_CLASSIFIER_THRESHOLD",
         "COMMAND_CLASSIFIER_MODEL_PATH",
@@ -8822,8 +9707,29 @@ def GetConf():
         "OPENAI_TIMEOUT",
         "OPENAI_INSTRUCTIONS",
         "SPACY_MODEL",
+        "STT_TRANSCRIPT_CONFIDENCE_MIN",
+        "STT_WORD_CONFIDENCE_MIN",
+        "STT_AVG_WORD_CONFIDENCE_MIN",
+        "STT_BAD_WORD_RATIO_MAX",
+        "STT_BAD_WORD_COUNT_MAX",
+        "STT_DEBUG",
+        "STT_DEBUG_DIR",
+        "STT_LOCAL_FALLBACK_ENABLED",
+        "STT_LOCAL_MODEL_PATH",
         "GOOGLE_STT_TIMEOUT",
         "GOOGLE_LANGUAGE_TIMEOUT",
+        "WEB_SEARCH_TIMEOUT",
+        "READ_LINK_TIMEOUT",
+        "PYPI_VERSION_TIMEOUT",
+        "GPT4FREE_PROBE_TIMEOUT",
+        "TTS_CACHE_ENABLED",
+        "TTS_CACHE_DIR",
+        "RESPONSE_STREAMING_ENABLED",
+        "RESPONSE_STREAM_MIN_CHARS",
+        "RESPONSE_STREAM_MAX_CHARS",
+        "TTS_PARALLEL_WORKERS",
+        "HISTORY_INDEX_ENABLED",
+        "HISTORY_INDEX_PATH",
         "HISTORY_CLASSIFICATION_ENABLED",
         "GOOGLE_SORT_BY_DATE",
         "GPT4FREE_SERVERS_LIST",
@@ -8899,10 +9805,16 @@ def GetConf():
                  PLAYBACK_INTERRUPT_ENABLED = Config_Bool(conf, default=False)
 
             elif option == "PLAYBACK_INTERRUPT_TIMEOUT":
-                try:
-                    PLAYBACK_INTERRUPT_TIMEOUT = float(conf)
-                except Exception:
-                    PLAYBACK_INTERRUPT_TIMEOUT = 30.0
+                PLAYBACK_INTERRUPT_TIMEOUT = Config_Positive_Float(conf, 30.0)
+
+            elif option == "WAIT_FOR_TIMEOUT":
+                WAIT_FOR_TIMEOUT = Config_Positive_Float(conf, 30.0)
+
+            elif option == "WAIT_FOR_POLL_INTERVAL":
+                WAIT_FOR_POLL_INTERVAL = Config_Positive_Float(conf, 0.05)
+
+            elif option == "PLAYBACK_POLL_INTERVAL":
+                PLAYBACK_POLL_INTERVAL = Config_Positive_Float(conf, 0.05)
 
             elif option == "COMMAND_CLASSIFIER_ENABLED":
                  COMMAND_CLASSIFIER_ENABLED = Config_Bool(conf, default=False)
@@ -8942,11 +9854,86 @@ def GetConf():
                 if conf:
                     SPACY_MODEL = conf
 
+            elif option == "STT_TRANSCRIPT_CONFIDENCE_MIN":
+                STT_TRANSCRIPT_CONFIDENCE_MIN = Config_Positive_Float(conf, 0.7)
+
+            elif option == "STT_WORD_CONFIDENCE_MIN":
+                STT_WORD_CONFIDENCE_MIN = Config_Positive_Float(conf, 0.6)
+
+            elif option == "STT_AVG_WORD_CONFIDENCE_MIN":
+                STT_AVG_WORD_CONFIDENCE_MIN = Config_Positive_Float(conf, 0.65)
+
+            elif option == "STT_BAD_WORD_RATIO_MAX":
+                STT_BAD_WORD_RATIO_MAX = Config_Positive_Float(conf, 0.25)
+
+            elif option == "STT_BAD_WORD_COUNT_MAX":
+                try:
+                    STT_BAD_WORD_COUNT_MAX = max(0, int(conf))
+                except Exception:
+                    STT_BAD_WORD_COUNT_MAX = 2
+
+            elif option == "STT_DEBUG":
+                STT_DEBUG = Config_Bool(conf, default=False)
+
+            elif option == "STT_DEBUG_DIR":
+                STT_DEBUG_DIR = conf
+
+            elif option == "STT_LOCAL_FALLBACK_ENABLED":
+                STT_LOCAL_FALLBACK_ENABLED = Config_Bool(conf, default=False)
+
+            elif option == "STT_LOCAL_MODEL_PATH":
+                STT_LOCAL_MODEL_PATH = conf
+
             elif option == "GOOGLE_STT_TIMEOUT":
                 GOOGLE_STT_TIMEOUT = Config_Positive_Float(conf, 20.0)
 
             elif option == "GOOGLE_LANGUAGE_TIMEOUT":
                 GOOGLE_LANGUAGE_TIMEOUT = Config_Positive_Float(conf, 8.0)
+
+            elif option == "WEB_SEARCH_TIMEOUT":
+                WEB_SEARCH_TIMEOUT = Config_Positive_Float(conf, 10.0)
+
+            elif option == "READ_LINK_TIMEOUT":
+                READ_LINK_TIMEOUT = Config_Positive_Float(conf, 10.0)
+
+            elif option == "PYPI_VERSION_TIMEOUT":
+                PYPI_VERSION_TIMEOUT = Config_Positive_Float(conf, 5.0)
+
+            elif option == "GPT4FREE_PROBE_TIMEOUT":
+                GPT4FREE_PROBE_TIMEOUT = Config_Positive_Float(conf, 15.0)
+
+            elif option == "TTS_CACHE_ENABLED":
+                TTS_CACHE_ENABLED = Config_Bool(conf, default=True)
+
+            elif option == "TTS_CACHE_DIR":
+                TTS_CACHE_DIR = conf
+
+            elif option == "RESPONSE_STREAMING_ENABLED":
+                RESPONSE_STREAMING_ENABLED = Config_Bool(conf, default=True)
+
+            elif option == "RESPONSE_STREAM_MIN_CHARS":
+                try:
+                    RESPONSE_STREAM_MIN_CHARS = max(1, int(conf))
+                except Exception:
+                    RESPONSE_STREAM_MIN_CHARS = 120
+
+            elif option == "RESPONSE_STREAM_MAX_CHARS":
+                try:
+                    RESPONSE_STREAM_MAX_CHARS = max(1, int(conf))
+                except Exception:
+                    RESPONSE_STREAM_MAX_CHARS = 450
+
+            elif option == "TTS_PARALLEL_WORKERS":
+                try:
+                    TTS_PARALLEL_WORKERS = max(1, int(conf))
+                except Exception:
+                    TTS_PARALLEL_WORKERS = 1
+
+            elif option == "HISTORY_INDEX_ENABLED":
+                HISTORY_INDEX_ENABLED = Config_Bool(conf, default=True)
+
+            elif option == "HISTORY_INDEX_PATH":
+                HISTORY_INDEX_PATH = conf
 
             elif option == "HISTORY_CLASSIFICATION_ENABLED":
                 HISTORY_CLASSIFICATION_ENABLED = Config_Bool(conf, default=True)
@@ -9043,7 +10030,7 @@ def GetConf():
         os.makedirs(SCRIPT_PATH + "/datas", exist_ok=True)
         with open(SCRIPT_PATH + "/datas/conf.trinity", "w") as f:
             data = """SAVED_ANSWER = default
-OPENAI_ENABLED = True #True or False - use OpenAI before gpt4free
+OPENAI_ENABLED = True # True: utiliser OpenAI avant gpt4free.
 OPENAI_MODEL = gpt-5.5
 OPENAI_API_KEY_FILE = keys/openai.key
 OPENAI_TIMEOUT = 30
@@ -9051,27 +10038,51 @@ OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
 SPACY_MODEL = fr_core_news_md
 GOOGLE_STT_TIMEOUT = 20
 GOOGLE_LANGUAGE_TIMEOUT = 8
+STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
+STT_WORD_CONFIDENCE_MIN = 0.6
+STT_AVG_WORD_CONFIDENCE_MIN = 0.65
+STT_BAD_WORD_RATIO_MAX = 0.25
+STT_BAD_WORD_COUNT_MAX = 2
+STT_DEBUG = False
+STT_DEBUG_DIR = logs/stt
+STT_LOCAL_FALLBACK_ENABLED = False
+STT_LOCAL_MODEL_PATH = models/vosk-model-small-fr-0.22
+WEB_SEARCH_TIMEOUT = 10
+READ_LINK_TIMEOUT = 10
+PYPI_VERSION_TIMEOUT = 5
+GPT4FREE_PROBE_TIMEOUT = 15
+WAIT_FOR_TIMEOUT = 30
+WAIT_FOR_POLL_INTERVAL = 0.05
+PLAYBACK_POLL_INTERVAL = 0.05
+TTS_CACHE_ENABLED = True
+TTS_CACHE_DIR = cache/tts
+RESPONSE_STREAMING_ENABLED = True
+RESPONSE_STREAM_MIN_CHARS = 120
+RESPONSE_STREAM_MAX_CHARS = 450
+TTS_PARALLEL_WORKERS = 1
+HISTORY_INDEX_ENABLED = True
+HISTORY_INDEX_PATH = cache/history_index.json
 HISTORY_CLASSIFICATION_ENABLED = True
 GOOGLE_SORT_BY_DATE = False
-GPT4FREE_SERVERS_LIST = None #[g4f.Provider.PROVIDERNAME1,g4f.Provider.PROVIDERNAME2] or None
-GPT4FREE_SERVERS_STATUS = Active #Active or Unknown or All or None
-GPT4FREE_SERVERS_AUTH = False #True or False or All
-GPT4FREE_COOKIES_AUTO_SYNC = True # True or False - copy har/json captures before loading cookies
-GPT4FREE_COOKIES_SYNC_DIR = tools/har_and_cookies
+GPT4FREE_SERVERS_LIST = None # Liste de providers gpt4free ou None.
+GPT4FREE_SERVERS_STATUS = Active # Active, Unknown, All ou None.
+GPT4FREE_SERVERS_AUTH = False # True, False ou All.
+GPT4FREE_COOKIES_AUTO_SYNC = True # True: copie les captures HAR/JSON avant de charger les cookies.
+GPT4FREE_COOKIES_SYNC_DIR = g4f_cookies/import
 GPT4FREE_AUTO_REJECT_NOTWORKING = True
-INTERPRETOR = True # True or False
-PUSH_TO_TALK = False # True or False - press Enter instead of using wake word
-PLAYBACK_INTERRUPT_ENABLED = False # True records during playback to listen for stop commands
-PLAYBACK_INTERRUPT_TIMEOUT = 30 # seconds to keep listening during one playback
-COMMAND_CLASSIFIER_ENABLED = False # True or False - use optional TensorFlow command classifier
-COMMAND_CLASSIFIER_THRESHOLD = 0.65 # minimum classifier score to run command matching
+INTERPRETOR = True # True: utiliser le clavier au lieu du micro.
+PUSH_TO_TALK = False # True: appuyer sur Entrée au lieu du wake word.
+PLAYBACK_INTERRUPT_ENABLED = False # True: écoute les commandes stop/arrête pendant la lecture.
+PLAYBACK_INTERRUPT_TIMEOUT = 30 # Durée maximale d'écoute pendant une lecture.
+COMMAND_CLASSIFIER_ENABLED = False # True: utiliser le classifieur TensorFlow optionnel.
+COMMAND_CLASSIFIER_THRESHOLD = 0.65 # Score minimal du classifieur pour accepter une commande.
 COMMAND_CLASSIFIER_MODEL_PATH = datas/command_classifier.keras
-CHECK_UPDATE = False #Check update for Trinitty or g4f
-DEBUG = False #Print debug stuffs
-CMD_DBG = False #Print commands results only for testing purpose
-SYNTAX_DBG = False #Print output of Special syntax found in database at launch
-SEARCH_DBG = False #Test output from Isolate_Search only .
-XCB_ERROR_FIX = False #Fix Xcb error from popping due to DISPLAY env variable."""
+CHECK_UPDATE = False # True: vérifier les mises à jour Trinitty/gpt4free.
+DEBUG = False # True: afficher les logs détaillés.
+CMD_DBG = False # True: debug des commandes.
+SYNTAX_DBG = False # True: debug des syntaxes au chargement.
+SEARCH_DBG = False # True: debug de l'extraction des recherches.
+XCB_ERROR_FIX = False # True: masque certains avertissements XCB liés à DISPLAY."""
             f.write(data)
 
         DEBUG = False
@@ -9090,6 +10101,18 @@ XCB_ERROR_FIX = False #Fix Xcb error from popping due to DISPLAY env variable.""
         SPACY_MODEL = "fr_core_news_md"
         GOOGLE_STT_TIMEOUT = 20.0
         GOOGLE_LANGUAGE_TIMEOUT = 8.0
+        WEB_SEARCH_TIMEOUT = 10.0
+        READ_LINK_TIMEOUT = 10.0
+        PYPI_VERSION_TIMEOUT = 5.0
+        GPT4FREE_PROBE_TIMEOUT = 15.0
+        TTS_CACHE_ENABLED = True
+        TTS_CACHE_DIR = "cache/tts"
+        RESPONSE_STREAMING_ENABLED = True
+        RESPONSE_STREAM_MIN_CHARS = 120
+        RESPONSE_STREAM_MAX_CHARS = 450
+        TTS_PARALLEL_WORKERS = 1
+        HISTORY_INDEX_ENABLED = True
+        HISTORY_INDEX_PATH = "cache/history_index.json"
         HISTORY_CLASSIFICATION_ENABLED = True
         GOOGLE_SORT_BY_DATE = False
         GPT4FREE_SERVERS_LIST = None
@@ -9155,7 +10178,9 @@ def Installed_Trinitty_Version():
         return Project_Version_From_Pyproject()
 
 
-def Pypi_Latest_Version(package_name=PYPI_PACKAGE_NAME, timeout=5):
+def Pypi_Latest_Version(package_name=PYPI_PACKAGE_NAME, timeout=None):
+    if timeout is None:
+        timeout = Config_Positive_Float(globals().get("PYPI_VERSION_TIMEOUT", 5.0), 5.0)
     url = "https://pypi.org/pypi/%s/json" % package_name
     with urlopen(url, timeout=timeout) as response:  # noqa: S310 - fixed PyPI JSON endpoint for update checks.
         payload = json.loads(response.read().decode("utf-8"))
@@ -9251,8 +10276,6 @@ if __name__ == "__main__":
     SCRIPT_PATH = Default_Script_Path()
     SCRIPT_PATH = SCRIPT_PATH.removesuffix(".")
 
-    LAST_SHA = "1240adc232e94171b840a519a79b437cf5524321"
-
     DISPLAY = ""
     Providers_To_Use = []
     Runtime_Errors = []
@@ -9262,6 +10285,9 @@ if __name__ == "__main__":
     PUSH_TO_TALK = False
     PLAYBACK_INTERRUPT_ENABLED = False
     PLAYBACK_INTERRUPT_TIMEOUT = 30.0
+    WAIT_FOR_TIMEOUT = 30.0
+    WAIT_FOR_POLL_INTERVAL = 0.05
+    PLAYBACK_POLL_INTERVAL = 0.05
     COMMAND_CLASSIFIER_ENABLED = False
     COMMAND_CLASSIFIER_THRESHOLD = 0.65
     COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"
@@ -9271,7 +10297,7 @@ if __name__ == "__main__":
     GPT4FREE_SERVERS_STATUS = "Active"
     GPT4FREE_SERVERS_AUTH = False
     GPT4FREE_COOKIES_AUTO_SYNC = True
-    GPT4FREE_COOKIES_SYNC_DIR = "tools/har_and_cookies"
+    GPT4FREE_COOKIES_SYNC_DIR = "g4f_cookies/import"
     GPT4FREE_COOKIES_LOADED = False
     GPT4FREE_RUNTIME_AVAILABLE = None
     GPT4FREE_AUTO_REJECT_NOTWORKING = True
@@ -9282,8 +10308,44 @@ if __name__ == "__main__":
     OPENAI_TIMEOUT = 30
     OPENAI_INSTRUCTIONS = "Reponds en francais de facon concise et naturelle."
     SPACY_MODEL = "fr_core_news_md"
+    STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
+    STT_WORD_CONFIDENCE_MIN = 0.6
+    STT_AVG_WORD_CONFIDENCE_MIN = 0.65
+    STT_BAD_WORD_RATIO_MAX = 0.25
+    STT_BAD_WORD_COUNT_MAX = 2
+    STT_DEBUG = False
+    STT_DEBUG_DIR = "logs/stt"
+    STT_LOCAL_FALLBACK_ENABLED = False
+    STT_LOCAL_MODEL_PATH = "models/vosk-model-small-fr-0.22"
     GOOGLE_STT_TIMEOUT = 20.0
     GOOGLE_LANGUAGE_TIMEOUT = 8.0
+    WEB_SEARCH_TIMEOUT = 10.0
+    READ_LINK_TIMEOUT = 10.0
+    PYPI_VERSION_TIMEOUT = 5.0
+    GPT4FREE_PROBE_TIMEOUT = 15.0
+    TTS_CACHE_ENABLED = True
+    TTS_CACHE_DIR = "cache/tts"
+    RESPONSE_STREAMING_ENABLED = True
+    RESPONSE_STREAM_MIN_CHARS = 120
+    RESPONSE_STREAM_MAX_CHARS = 450
+    TTS_PARALLEL_WORKERS = 1
+    HISTORY_INDEX_ENABLED = True
+    HISTORY_INDEX_PATH = "cache/history_index.json"
+    OPENAI_CLIENT = None
+    OPENAI_CLIENT_CONFIG = None
+    GOOGLE_SPEECH_CLIENT = None
+    GOOGLE_TTS_CLIENT = None
+    GOOGLE_LANGUAGE_CLIENT = None
+    VOSK_MODEL = None
+    COMMAND_REGISTRY_READY = False
+    SPACY_NLP = None
+    SPACY_NLP_MODEL = None
+    FRENCH_STOP_WORDS = None
+    WORDNET_LEMMATIZER = None
+    PREPROCESS_CACHE = OrderedDict()
+    HISTORY_INDEX_CACHE = None
+    HISTORY_INDEX_SIGNATURE = None
+    COMMAND_TRIGGER_INDEX = {}
     HISTORY_CLASSIFICATION_ENABLED = True
     GOOGLE_SORT_BY_DATE = False
     CHECK_UPDATE = False
@@ -9382,8 +10444,14 @@ if __name__ == "__main__":
     PRINT("-Trinitty:OPENAI_API_KEY_FILE:%s" % OPENAI_API_KEY_FILE)
     PRINT("-Trinitty:OPENAI_TIMEOUT:%s" % OPENAI_TIMEOUT)
     PRINT("-Trinitty:SPACY_MODEL:%s" % SPACY_MODEL)
+    PRINT("-Trinitty:STT_TRANSCRIPT_CONFIDENCE_MIN:%s" % STT_TRANSCRIPT_CONFIDENCE_MIN)
+    PRINT("-Trinitty:STT_WORD_CONFIDENCE_MIN:%s" % STT_WORD_CONFIDENCE_MIN)
+    PRINT("-Trinitty:STT_DEBUG:%s" % STT_DEBUG)
+    PRINT("-Trinitty:STT_LOCAL_FALLBACK_ENABLED:%s" % STT_LOCAL_FALLBACK_ENABLED)
     PRINT("-Trinitty:GOOGLE_STT_TIMEOUT:%s" % GOOGLE_STT_TIMEOUT)
     PRINT("-Trinitty:GOOGLE_LANGUAGE_TIMEOUT:%s" % GOOGLE_LANGUAGE_TIMEOUT)
+    PRINT("-Trinitty:WEB_SEARCH_TIMEOUT:%s" % WEB_SEARCH_TIMEOUT)
+    PRINT("-Trinitty:TTS_CACHE_ENABLED:%s" % TTS_CACHE_ENABLED)
     PRINT("-Trinitty:HISTORY_CLASSIFICATION_ENABLED:%s" % HISTORY_CLASSIFICATION_ENABLED)
     PRINT("-Trinitty:GOOGLE_SORT_BY_DATE:%s" % GOOGLE_SORT_BY_DATE)
     PRINT("-Trinitty:GPT4FREE_SERVERS_LIST:%s" % GPT4FREE_SERVERS_LIST)

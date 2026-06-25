@@ -109,7 +109,7 @@
 #   Suppression des commentaires obsoletes vers l'ancien modele Trinity_en_linux; le gros refactoring reste hors scope sans cible plus precise.
 #
 # DONE - chopper les cookies pour les providers qui le demandent.
-#   Trinitty synchronise les captures har/json de tools/har_and_cookies vers datas/har_and_cookies avant g4f.cookies.read_cookie_files.
+#   Trinitty synchronise les captures har/json depuis ~/.local/share/Trinitty/g4f_cookies/import vers le dossier runtime avant g4f.cookies.read_cookie_files.
 #   Tests: test_sync_gpt4free_cookie_captures_copies_har_and_json, test_load_gpt4free_cookies_syncs_then_loads_cookie_files
 #
 # DONE - gerer les providers demandant une authentification.

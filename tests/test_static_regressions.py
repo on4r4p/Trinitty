@@ -1,9 +1,7 @@
 import importlib.util
-import contextlib
-import io
 import os
 import re
-import tempfile
+import subprocess
 import unittest
 import ast
 from glob import glob
@@ -67,6 +65,9 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
         self.assertIn("datas/*.local.trinity", gitignore)
         self.assertIn("SAVED_ANSWER = default", conf)
         self.assertIn("CHECK_UPDATE = False", conf)
+        self.assertIn("DEBUG = False", conf)
+        self.assertIn("RESPONSE_STREAMING_ENABLED = True", conf)
+        self.assertIn("HISTORY_INDEX_ENABLED = True", conf)
         self.assertIn("datas/conf.local.trinity", self.source)
         self.assertNotIn("g4f.Provider.you", self.source)
 
@@ -77,9 +78,7 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
         self.assertIn("!keys/.gitkeep", gitignore)
         self.assertIn("history/*", gitignore)
         self.assertIn("!history/.gitkeep", gitignore)
-        self.assertIn("tools/tool_history/*", gitignore)
-        self.assertIn("!tools/tool_history/*.py", gitignore)
-        self.assertIn("tools/*.wav", gitignore)
+        self.assertIn("tools/", gitignore)
         self.assertTrue((ROOT / "keys" / ".gitkeep").exists())
         self.assertTrue((ROOT / "history" / ".gitkeep").exists())
 
@@ -109,74 +108,6 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
         }
 
         self.assertEqual([], sorted(local_wavs - covered))
-
-    def test_tool_scripts_import_without_running_main(self):
-        env_name = "GOOGLE_APPLICATION_CREDENTIALS"
-        original_google_credentials = os.environ.get(env_name)
-        scripts = [
-            ROOT / "gitup.py",
-            ROOT / "tools" / "changerate.py",
-            ROOT / "tools" / "check_server.py",
-            ROOT / "tools" / "checkinput.py",
-            ROOT / "tools" / "checksrate.py",
-            ROOT / "tools" / "cookies.py",
-            ROOT / "tools" / "gitup.py",
-            ROOT / "tools" / "makesound.py",
-            ROOT / "tools" / "nbr.py",
-            ROOT / "tools" / "rename.py",
-        ]
-
-        try:
-            for index, path in enumerate(scripts):
-                module_name = f"trinitty_tool_import_{index}_{path.stem}"
-                spec = importlib.util.spec_from_file_location(module_name, path)
-                module = importlib.util.module_from_spec(spec)
-                stdout = io.StringIO()
-                stderr = io.StringIO()
-
-                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                    spec.loader.exec_module(module)
-
-                self.assertEqual("", stdout.getvalue(), path.as_posix())
-                self.assertEqual("", stderr.getvalue(), path.as_posix())
-                self.assertTrue(callable(getattr(module, "main", None)), path.as_posix())
-            self.assertEqual(original_google_credentials, os.environ.get(env_name))
-        finally:
-            if original_google_credentials is None:
-                os.environ.pop(env_name, None)
-            else:
-                os.environ[env_name] = original_google_credentials
-
-    def test_makesound_google_credentials_are_file_gated(self):
-        env_name = "GOOGLE_APPLICATION_CREDENTIALS"
-        original_google_credentials = os.environ.get(env_name)
-        spec = importlib.util.spec_from_file_location("trinitty_makesound_credentials_test", ROOT / "tools" / "makesound.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            try:
-                os.environ.pop(env_name, None)
-                module.DEFAULT_GOOGLE_CREDENTIALS = str(root / "missing-google-adc.json")
-                module.ensure_google_credentials()
-                self.assertNotIn(env_name, os.environ)
-
-                credentials = root / "google_adc.json"
-                credentials.write_text("{}")
-                module.DEFAULT_GOOGLE_CREDENTIALS = str(credentials)
-                module.ensure_google_credentials()
-                self.assertEqual(str(credentials), os.environ.get(env_name))
-
-                user_credentials = root / "user-google.json"
-                os.environ[env_name] = str(user_credentials)
-                module.ensure_google_credentials()
-                self.assertEqual(str(user_credentials), os.environ.get(env_name))
-            finally:
-                if original_google_credentials is None:
-                    os.environ.pop(env_name, None)
-                else:
-                    os.environ[env_name] = original_google_credentials
 
     def test_project_uses_trinitty_entrypoint_name(self):
         gitignore = (ROOT / ".gitignore").read_text()
@@ -208,10 +139,72 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "publish-pypi.yml").read_text()
         publish_job = workflow.split("  publish:", 1)[1]
 
+        self.assertIn("quality:", workflow)
+        self.assertIn("secrets:", workflow)
+        self.assertIn("python -m ruff check", workflow)
+        self.assertIn("python -m pytest", workflow)
+        self.assertIn("python -m build", workflow)
+        self.assertIn("python -m twine check --strict dist/*", workflow)
+        self.assertIn("gitleaks/gitleaks-action@v3", workflow)
+        self.assertIn("actions/checkout@v6", workflow)
         self.assertIn("id-token: write", publish_job)
         self.assertIn("pypa/gh-action-pypi-publish@release/v1", publish_job)
         self.assertNotIn("environment:", publish_job)
         self.assertNotIn("name: pypi", publish_job)
+
+    def test_pre_commit_runs_ruff_and_gitleaks(self):
+        precommit = (ROOT / ".pre-commit-config.yaml").read_text()
+        gitleaks = (ROOT / ".gitleaks.toml").read_text()
+
+        self.assertIn("ruff-pre-commit", precommit)
+        self.assertIn("github.com/gitleaks/gitleaks", precommit)
+        self.assertIn("v8.30.1", precommit)
+        self.assertIn("^keys/\\.gitkeep$", gitleaks)
+        self.assertNotIn("README", gitleaks)
+
+    def test_tracked_files_do_not_include_secret_locations(self):
+        tracked = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
+        forbidden = [
+            "keys/google_adc.json",
+            "old/token.py",
+            "keys/openai.key",
+            "keys/google_search.key",
+            "keys/google_translate.key",
+            "keys/detectlanguage.key",
+            "keys/pico.key",
+        ]
+
+        for path in forbidden:
+            self.assertNotIn(path, tracked)
+
+        sensitive_patterns = [
+            re.compile(r"keys/.*\.(key|id)$"),
+            re.compile(r"google_adc\.json$"),
+            re.compile(r"old/token\.py$"),
+        ]
+        offenders = [
+            path
+            for path in tracked
+            if any(pattern.search(path) for pattern in sensitive_patterns)
+            and path not in {"keys/.gitkeep"}
+        ]
+        self.assertEqual([], offenders)
+
+    def test_source_and_package_config_do_not_contain_obvious_secrets(self):
+        files = [
+            ROOT / "trinitty.py",
+            ROOT / "gitup.py",
+            ROOT / "pyproject.toml",
+            ROOT / "README.md",
+            ROOT / "datas" / "conf.trinity",
+        ]
+        combined = "\n".join(path.read_text(errors="ignore") for path in files)
+
+        self.assertNotRegex(combined, r"sk-[A-Za-z0-9_-]{20,}")
+        self.assertNotRegex(combined, r"AIza[0-9A-Za-z_-]{20,}")
+        self.assertNotRegex(combined, r"refresh_token\s*[:=]")
+        self.assertNotRegex(combined, r"-----BEGIN PRIVATE KEY-----")
+        self.assertNotRegex(combined, r"private_key\s*[:=]")
 
     def test_import_does_not_override_google_credentials_env(self):
         env_name = "GOOGLE_APPLICATION_CREDENTIALS"
@@ -235,9 +228,10 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
             "local_sounds/cmd/hit",
             "local_sounds/cmd/intro_",
             "local_sounds/cmd/outro_",
+            "models/vosk-model-small-fr-0.22",
         }
         missing = []
-        for path in [TRINITTY, *sorted((ROOT / "tools").glob("*.py"))]:
+        for path in [TRINITTY]:
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
