@@ -96,6 +96,12 @@ PLAYBACK_INTERRUPT_ENABLED = False
 # True: écouter les commandes stop/arrête pendant la lecture d'une réponse.
 PLAYBACK_INTERRUPT_TIMEOUT = 30
 # Durée maximale en secondes pour écouter une interruption pendant une lecture.
+PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
+# True: utilise Vosk local pour détecter stop/arrête pendant la lecture si un modèle est disponible.
+PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête,pause,tais toi,taisez vous
+# Mots/phrases d'arrêt séparés par virgule pour le détecteur local pendant lecture.
+PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+# Taille des petits blocs audio analysés par Vosk pendant la lecture.
 
 COMMAND_CLASSIFIER_ENABLED = False
 # True: utiliser le classifieur TensorFlow optionnel.

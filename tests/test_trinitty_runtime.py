@@ -27,6 +27,9 @@ def reset_command_state():
     trinitty.PUSH_TO_TALK = False
     trinitty.PLAYBACK_INTERRUPT_ENABLED = False
     trinitty.PLAYBACK_INTERRUPT_TIMEOUT = 30.0
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous"
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
     trinitty.COMMAND_CLASSIFIER_ENABLED = False
     trinitty.COMMAND_CLASSIFIER_THRESHOLD = 0.65
     trinitty.COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"
@@ -291,6 +294,35 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertFalse(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
             self.assertEqual("PLAYBACK_INTERRUPT_ENABLED = True # custom local choice\n", user_conf.read_text())
 
+    def test_append_missing_user_config_options_includes_help_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            user_conf = Path(tmp) / "conf.trinity"
+            user_conf.write_text("OPENAI_TIMEOUT = 60\n")
+            original_packaged_config_text = trinitty.Packaged_Config_Text
+            trinitty.Packaged_Config_Text = lambda: "\n".join(
+                [
+                    "OPENAI_TIMEOUT = 30",
+                    "# Délai maximum OpenAI.",
+                    "PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True",
+                    "# True: utilise Vosk local pendant la lecture.",
+                    "PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête",
+                    "# Mots/phrases d'arrêt séparés par virgule.",
+                ]
+            )
+            try:
+                self.assertTrue(trinitty.Append_Missing_User_Config_Options(str(user_conf)))
+            finally:
+                trinitty.Packaged_Config_Text = original_packaged_config_text
+
+            migrated = user_conf.read_text()
+
+        self.assertIn("OPENAI_TIMEOUT = 60", migrated)
+        self.assertNotIn("# Délai maximum OpenAI.", migrated)
+        self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True", migrated)
+        self.assertIn("# True: utilise Vosk local pendant la lecture.", migrated)
+        self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête", migrated)
+        self.assertIn("# Mots/phrases d'arrêt séparés par virgule.", migrated)
+
     def test_tts_cache_round_trip_uses_text_hash(self):
         reset_command_state()
         original_home = os.environ.get("HOME")
@@ -375,11 +407,19 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 return False
 
             def __iter__(self):
-                yield SimpleNamespace(delta="Premiere phrase. ")
-                yield SimpleNamespace(delta="Deuxieme phrase complete.")
+                yield SimpleNamespace(type="response.output_text.delta", delta="Premiere phrase. ")
+                yield SimpleNamespace(type="response.output_text.delta", delta="Deuxieme phrase complete.")
+                yield SimpleNamespace(
+                    type="response.output_text.done",
+                    text="Premiere phrase. Deuxieme phrase complete.",
+                )
+                yield {
+                    "type": "response.completed",
+                    "output_text": "Premiere phrase. Deuxieme phrase complete.",
+                }
 
             def get_final_response(self):
-                return SimpleNamespace(output_text="")
+                return SimpleNamespace(output_text="Premiere phrase. Deuxieme phrase complete.")
 
         class FakeResponses:
             def stream(self, **kwargs):
@@ -398,6 +438,16 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertEqual(["Premiere phrase.", "Deuxieme phrase complete."], segments)
         self.assertEqual("question", fake_responses.kwargs["input"])
         self.assertEqual(30.0, fake_responses.kwargs["timeout"])
+
+    def test_extract_history_urls_ignores_sentence_fragments(self):
+        reset_command_state()
+        text = (
+            "Avis medical.Il faut consulter. "
+            "Les lentilles.Si douleur, urgence. "
+            "Source: https://example.invalid/page?q=1."
+        )
+
+        self.assertEqual(["https://example.invalid/page?q=1"], trinitty.Extract_History_Urls(text))
 
     def test_text_to_speech_streamed_plays_first_segment_before_end(self):
         reset_command_state()
@@ -1893,6 +1943,61 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertTrue(trinitty.Playback_Stop_Command_Detected("arrête"))
         self.assertFalse(trinitty.Playback_Stop_Command_Detected("continue"))
 
+    def test_playback_interrupt_local_stt_cancels_playback(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+        calls = []
+
+        class FakeRecognizer:
+            def __init__(self, model, sample_rate, grammar):
+                calls.append(("recognizer", model, sample_rate, grammar))
+
+            def AcceptWaveform(self, _pcm):
+                return False
+
+            def PartialResult(self):
+                return '{"partial": "arrête"}'
+
+            def FinalResult(self):
+                return "{}"
+
+        class FakeStream:
+            def read(self, frame_length, exception_on_overflow=False):
+                calls.append(("read", frame_length, exception_on_overflow))
+                return b"\x00\x00" * frame_length
+
+            def close(self):
+                calls.append("close")
+
+        class FakePyAudio:
+            def open(self, **kwargs):
+                calls.append(("open", kwargs))
+                return FakeStream()
+
+            def terminate(self):
+                calls.append("terminate")
+
+        original_vosk = trinitty.vosk
+        original_pyaudio = trinitty.pyaudio
+        original_get_model = trinitty.Get_Vosk_Model
+        trinitty.vosk = SimpleNamespace(KaldiRecognizer=FakeRecognizer)
+        trinitty.pyaudio = SimpleNamespace(PyAudio=lambda: FakePyAudio(), paInt16=8)
+        trinitty.Get_Vosk_Model = lambda: "model"
+        stop_event = trinitty.Event()
+        try:
+            self.assertTrue(trinitty.Playback_Interrupt_Local_STT_Listener(stop_event, timeout=1))
+        finally:
+            trinitty.vosk = original_vosk
+            trinitty.pyaudio = original_pyaudio
+            trinitty.Get_Vosk_Model = original_get_model
+
+        self.assertTrue(stop_event.is_set())
+        self.assertFalse(trinitty.cancel_operation.empty())
+        self.assertIn('"arrête"', calls[0][3])
+        self.assertIn("close", calls)
+        self.assertIn("terminate", calls)
+
     def test_playback_interrupt_listener_is_disabled_by_default(self):
         reset_command_state()
         reset_runtime_queues()
@@ -1919,6 +2024,30 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Play_Audio_File = original_play
 
         self.assertEqual([("start", False), ("play", audio_wav), ("stop", "listener")], calls)
+
+    def test_play_audio_with_interrupt_passes_cancel_event_to_playback(self):
+        reset_command_state()
+        calls = []
+        audio_wav = temp_path("audio.wav")
+        event = trinitty.Event()
+        listener = (event, SimpleNamespace())
+        original_start = trinitty.Start_Playback_Interrupt_Listener
+        original_stop = trinitty.Stop_Playback_Interrupt_Listener
+        original_play = trinitty.Play_Audio_File
+        trinitty.Start_Playback_Interrupt_Listener = lambda force=False: listener
+        trinitty.Stop_Playback_Interrupt_Listener = lambda listener_info: calls.append(("stop", listener_info))
+        trinitty.Play_Audio_File = lambda filepath, cancel_event=None: calls.append(
+            ("play", filepath, cancel_event)
+        ) or 0
+        try:
+            self.assertEqual(0, trinitty.Play_Audio_File_With_Interrupt(audio_wav))
+        finally:
+            trinitty.Start_Playback_Interrupt_Listener = original_start
+            trinitty.Stop_Playback_Interrupt_Listener = original_stop
+            trinitty.Play_Audio_File = original_play
+
+        self.assertEqual(("play", audio_wav, event), calls[0])
+        self.assertEqual(("stop", listener), calls[1])
 
     def test_repeat_response_forces_interrupt_listener_for_last_answer(self):
         reset_command_state()

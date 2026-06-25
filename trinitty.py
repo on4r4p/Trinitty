@@ -612,6 +612,20 @@ def Config_Keys_From_Text(text):
     return keys
 
 
+def Config_Missing_Option_Block(lines, start_index):
+    block = [lines[start_index]]
+    for line in lines[start_index + 1:]:
+        key, _value = Config_Option_Value(line)
+        if key:
+            break
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            block.append(line)
+            continue
+        break
+    return block
+
+
 def Append_Missing_User_Config_Options(user_conf):
     if not os.path.exists(user_conf):
         return False
@@ -625,10 +639,11 @@ def Append_Missing_User_Config_Options(user_conf):
 
     existing_keys = set(Config_Keys_From_Text(user_text))
     missing_lines = []
-    for line in packaged_text.splitlines():
+    packaged_lines = packaged_text.splitlines()
+    for index, line in enumerate(packaged_lines):
         key, _value = Config_Option_Value(line)
         if key and key not in existing_keys:
-            missing_lines.append(line)
+            missing_lines.extend(Config_Missing_Option_Block(packaged_lines, index))
             existing_keys.add(key)
 
     if not missing_lines:
@@ -686,6 +701,7 @@ def Initialize_User_Data():
         "keys",
         "history",
         "tmp",
+        "models",
         "g4f_cookies",
         os.path.join("saved_answer", "saved_error"),
     ]:
@@ -1434,6 +1450,9 @@ WAIT_FOR_POLL_INTERVAL = 0.05
 PLAYBACK_POLL_INTERVAL = 0.05
 PLAYBACK_INTERRUPT_TIMEOUT = 30.0
 PLAYBACK_INTERRUPT_ENABLED = False
+PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
+PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous"
+PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
 COMMAND_CLASSIFIER_ENABLED = False
 COMMAND_CLASSIFIER_THRESHOLD = 0.65
 COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"
@@ -2015,17 +2034,33 @@ def Openai_Gpt(input):
 
 
 def Openai_Stream_Event_Text(event):
+    event_type = ""
     if isinstance(event, dict):
-        for key in ["delta", "text", "output_text"]:
-            value = event.get(key)
-            if isinstance(value, str) and value:
-                return value
-        return ""
-
-    for attr in ["delta", "text", "output_text"]:
-        value = getattr(event, attr, None)
+        event_type = str(event.get("type", "") or "").lower()
+        if event_type and "delta" not in event_type:
+            return ""
+        value = event.get("delta")
         if isinstance(value, str) and value:
             return value
+        if isinstance(value, dict):
+            for key in ["text", "output_text"]:
+                nested = value.get(key)
+                if isinstance(nested, str) and nested:
+                    return nested
+        return ""
+
+    event_type = str(getattr(event, "type", "") or "").lower()
+    if event_type and "delta" not in event_type:
+        return ""
+
+    value = getattr(event, "delta", None)
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, dict):
+        for key in ["text", "output_text"]:
+            nested = value.get(key)
+            if isinstance(nested, str) and nested:
+                return nested
     return ""
 
 
@@ -2107,6 +2142,19 @@ def Extract_First_Url(text):
     if not urls:
         return ""
     return urls[0].rstrip(".,;:!?")
+
+
+def Extract_History_Urls(text):
+    urls = []
+    seen = set()
+    for raw_url in re.findall(r"""https?://[^\s,'"()\[\]<>]+""", str(text or "")):
+        url = raw_url.rstrip(".,;:!?")
+        if not url or url in seen:
+            continue
+        if Search_Result_Url_Is_Usable(url):
+            seen.add(url)
+            urls.append(url)
+    return urls
 
 
 def Check_Free_Servers():
@@ -7659,6 +7707,13 @@ def Text_To_Speech_Streamed(segment_iter, stayawake=False, savehistory=True, bef
         else:
             Save_History(answer_txt, no_audio=True)
 
+    for wav_file in wav_files:
+        try:
+            if os.path.abspath(wav_file) != os.path.abspath(final_wav) and os.path.exists(wav_file):
+                os.remove(wav_file)
+        except Exception as e:
+            PRINT("\n-Trinitty:Text_To_Speech_Streamed:cleanup:%s" % str(e))
+
     if not stayawake:
         return Go_Back_To_Sleep(True)
     return True
@@ -7695,6 +7750,88 @@ def Playback_Stop_Command_Detected(text):
     return "F_wait" in ambiguity or "F_quit" in ambiguity
 
 
+def Playback_Interrupt_Config_List(value):
+    if isinstance(value, (list, tuple, set)):
+        raw_items = value
+    else:
+        raw_items = re.split(r"[,;]", str(value or ""))
+    return [str(item).strip().strip("'\"") for item in raw_items if str(item).strip().strip("'\"")]
+
+
+def Playback_Interrupt_Local_STT_Text(payload, key="text"):
+    try:
+        data = json.loads(payload or "{}")
+    except Exception:
+        return ""
+    return str(data.get(key) or "").strip()
+
+
+def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
+    if (
+        not Config_Bool(globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED", True), default=True)
+        or not Dependency_Available(vosk)
+        or not Dependency_Available(pyaudio)
+    ):
+        return None
+
+    words = Playback_Interrupt_Config_List(globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_WORDS", ""))
+    if not words:
+        return None
+    grammar = json.dumps(list(dict.fromkeys([*words, "[unk]"])), ensure_ascii=False)
+    chunk_seconds = Config_Positive_Float(
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS", 0.25),
+        0.25,
+    )
+    frames_per_buffer = max(800, int(16000 * chunk_seconds))
+    deadline = None
+    if timeout is not None:
+        timeout = float(timeout)
+        if timeout > 0:
+            deadline = time.monotonic() + timeout
+
+    recognizer = None
+    audio_stream = None
+    pa = None
+    try:
+        recognizer = vosk.KaldiRecognizer(Get_Vosk_Model(), 16000, grammar)
+        with ignoreStderr():
+            pa = pyaudio.PyAudio()
+        audio_stream = pa.open(
+            rate=16000,
+            channels=1,
+            format=pyaudio.paInt16,
+            input=True,
+            frames_per_buffer=frames_per_buffer,
+        )
+        while not stop_event.is_set() and (deadline is None or time.monotonic() < deadline):
+            pcm = audio_stream.read(frames_per_buffer, exception_on_overflow=False)
+            if recognizer.AcceptWaveform(pcm):
+                text = Playback_Interrupt_Local_STT_Text(recognizer.Result())
+            else:
+                text = Playback_Interrupt_Local_STT_Text(recognizer.PartialResult(), key="partial")
+            if text and Playback_Stop_Command_Detected(text):
+                PRINT("\n-Trinitty:Playback interrupt local STT detected:%s" % text)
+                cancel_operation.put(True)
+                stop_event.set()
+                return True
+        if recognizer is not None:
+            text = Playback_Interrupt_Local_STT_Text(recognizer.FinalResult())
+            if text and Playback_Stop_Command_Detected(text):
+                cancel_operation.put(True)
+                stop_event.set()
+                return True
+        return False
+    except Exception as e:
+        Log_Error("Playback_Interrupt_Local_STT_Listener", e)
+        PRINT("\n-Trinitty:Playback_Interrupt_Local_STT_Listener:Error:%s" % str(e))
+        return None
+    finally:
+        if audio_stream is not None:
+            audio_stream.close()
+        if pa is not None:
+            pa.terminate()
+
+
 def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
     if (
         globals().get("INTERPRETOR", False)
@@ -7704,6 +7841,10 @@ def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
 
     if timeout is None:
         timeout = globals().get("PLAYBACK_INTERRUPT_TIMEOUT", 30.0)
+
+    local_stt_result = Playback_Interrupt_Local_STT_Listener(stop_event, timeout=timeout)
+    if local_stt_result is not None:
+        return local_stt_result
 
     try:
         if Start_Thread_Record() is False:
@@ -7723,6 +7864,7 @@ def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
         text, recognized = Check_Transcript(transcripts, transcripts_confidence, words, words_confidence, err_msg)
         if recognized and Playback_Stop_Command_Detected(text):
             cancel_operation.put(True)
+            stop_event.set()
             Stop_Recording()
             return True
     except Exception as e:
@@ -7814,6 +7956,8 @@ def Play_Audio_File(filepath, cancel_event=None):
 def Play_Audio_File_With_Interrupt(filepath, force=False):
     listener = Start_Playback_Interrupt_Listener(force=force)
     try:
+        if isinstance(listener, tuple) and listener:
+            return Play_Audio_File(filepath, cancel_event=listener[0])
         return Play_Audio_File(filepath)
     finally:
         Stop_Playback_Interrupt_Listener(listener)
@@ -9382,6 +9526,7 @@ def Save_History(answer, no_audio=False):
     hist_epok = now.timestamp()
 
     hist_tstamp = time.strftime(tformat, time.localtime(hist_epok))
+    hist_urls = Extract_History_Urls(answer)
 
     #  hist_file,hist_cats,hist_txt,hist_answer,hist_epok,hist_tstamp,hist_wav
 
@@ -9414,7 +9559,7 @@ def Save_History(answer, no_audio=False):
                     "hist_input_wav":"",
                     "hist_output": answer,
                     "hist_output_wav": new_wav,
-                    "hist_urls": URLExtract().find_urls(answer),
+                    "hist_urls": hist_urls,
                     "hist_epok": hist_epok,
                     "hist_tstamp": hist_tstamp,
                 }
@@ -9430,7 +9575,7 @@ def Save_History(answer, no_audio=False):
                     "hist_input_wav":"",
                     "hist_output": answer,
                     "hist_output_wav": new_wav,
-                    "hist_urls": URLExtract().find_urls(answer),
+                    "hist_urls": hist_urls,
                     "hist_epok": hist_epok,
                     "hist_tstamp": hist_tstamp,
                 }
@@ -9729,6 +9874,9 @@ def GetConf():
     global PUSH_TO_TALK
     global PLAYBACK_INTERRUPT_ENABLED
     global PLAYBACK_INTERRUPT_TIMEOUT
+    global PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED
+    global PLAYBACK_INTERRUPT_LOCAL_STT_WORDS
+    global PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS
     global WAIT_FOR_TIMEOUT
     global WAIT_FOR_POLL_INTERVAL
     global PLAYBACK_POLL_INTERVAL
@@ -9780,6 +9928,9 @@ def GetConf():
         "PUSH_TO_TALK",
         "PLAYBACK_INTERRUPT_ENABLED",
         "PLAYBACK_INTERRUPT_TIMEOUT",
+        "PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED",
+        "PLAYBACK_INTERRUPT_LOCAL_STT_WORDS",
+        "PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS",
         "WAIT_FOR_TIMEOUT",
         "WAIT_FOR_POLL_INTERVAL",
         "PLAYBACK_POLL_INTERVAL",
@@ -9892,6 +10043,15 @@ def GetConf():
 
             elif option == "PLAYBACK_INTERRUPT_TIMEOUT":
                 PLAYBACK_INTERRUPT_TIMEOUT = Config_Positive_Float(conf, 30.0)
+
+            elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED":
+                PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = Config_Bool(conf, default=True)
+
+            elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_WORDS":
+                PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = conf
+
+            elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS":
+                PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = Config_Positive_Float(conf, 0.25)
 
             elif option == "WAIT_FOR_TIMEOUT":
                 WAIT_FOR_TIMEOUT = Config_Positive_Float(conf, 30.0)
@@ -10160,6 +10320,9 @@ INTERPRETOR = True # True: utiliser le clavier au lieu du micro.
 PUSH_TO_TALK = False # True: appuyer sur Entrée au lieu du wake word.
 PLAYBACK_INTERRUPT_ENABLED = False # True: écoute les commandes stop/arrête pendant la lecture.
 PLAYBACK_INTERRUPT_TIMEOUT = 30 # Durée maximale d'écoute pendant une lecture.
+PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True # True: utilise Vosk local pour détecter stop/arrête pendant la lecture si un modèle est disponible.
+PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête,pause,tais toi,taisez vous # Mots/phrases d'arrêt séparés par virgule.
+PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25 # Taille des petits blocs audio analysés par Vosk.
 COMMAND_CLASSIFIER_ENABLED = False # True: utiliser le classifieur TensorFlow optionnel.
 COMMAND_CLASSIFIER_THRESHOLD = 0.65 # Score minimal du classifieur pour accepter une commande.
 COMMAND_CLASSIFIER_MODEL_PATH = datas/command_classifier.keras
