@@ -1563,6 +1563,46 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertEqual(1, len(calls[0][0]))
         self.assertEqual("cat", calls[0][0][0]["hist_cats"])
 
+    def test_clean_history_search_query_removes_command_noise(self):
+        reset_command_state()
+        self.assertEqual(
+            "vitesse lumiere",
+            trinitty.Clean_History_Search_Query("cherche dans l'historique la vitesse de la lumière"),
+        )
+
+    def test_search_history_cleans_query_and_matches_accents(self):
+        reset_command_state()
+        trinitty.Loaded_History_List = [
+            {
+                "hist_file": "science",
+                "hist_cats": "science",
+                "hist_input_full": "question source",
+                "hist_input_short": "question",
+                "hist_input_wav": "",
+                "hist_output": "La vitesse de la lumière est proche de 299 792 458 m/s.",
+                "hist_output_wav": "answer.wav",
+                "hist_urls": "",
+                "hist_epok": "1",
+                "hist_tstamp": "2026-06-25 12:00:00",
+            }
+        ]
+        calls = []
+        original_isolate = trinitty.Isolate_Search
+        original_results_hub = trinitty.Results_Hub
+        trinitty.Isolate_Search = lambda _text, _function_name: "cherche dans l historique la vitesse de la lumiere"
+        trinitty.Results_Hub = lambda sorted_results, top_results, from_function=None: calls.append(
+            (sorted_results, top_results, from_function)
+        ) or "results"
+        try:
+            self.assertEqual("results", trinitty.Search_History("cherche la vitesse"))
+        finally:
+            trinitty.Isolate_Search = original_isolate
+            trinitty.Results_Hub = original_results_hub
+
+        self.assertEqual("Search_History", calls[0][2])
+        self.assertEqual(1, len(calls[0][0]))
+        self.assertEqual("science", calls[0][0][0]["hist_cats"])
+
     def test_delete_last_history_entry_removes_latest_row(self):
         reset_command_state()
         with tempfile.TemporaryDirectory() as tmp:

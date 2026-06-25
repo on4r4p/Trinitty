@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 import traceback
+import unicodedata
 from urllib.parse import quote_plus
 from urllib.request import urlopen
 
@@ -5173,9 +5174,20 @@ def GetTitleLink(txt, site=None):
     return None
 
 
+def Normalize_Search_Query_Text(txt):
+    query = str(txt or "").lower()
+    try:
+        query = unidecode(query)
+    except Exception as e:
+        Log_Error("Normalize_Search_Query_Text", e)
+    if any(ord(char) > 127 for char in query):
+        query = unicodedata.normalize("NFKD", query).encode("ascii", "ignore").decode("ascii")
+    return query
+
+
 def Clean_Wikipedia_Search_Query(txt):
     original = str(txt or "").strip()
-    query = unidecode(original).lower()
+    query = Normalize_Search_Query_Text(original)
     query = query.replace("’", "'")
 
     polite_patterns = [
@@ -5213,7 +5225,7 @@ def Clean_Wikipedia_Search_Query(txt):
 
 def Clean_Web_Search_Query(txt):
     original = str(txt or "").strip()
-    query = unidecode(original).lower()
+    query = Normalize_Search_Query_Text(original)
     query = query.replace("’", "'")
 
     patterns = [
@@ -5244,6 +5256,55 @@ def Clean_Web_Search_Query(txt):
     )
     query = re.sub(r"\s+", " ", query).strip()
     return query or original
+
+
+def Clean_History_Search_Query(txt):
+    original = str(txt or "").strip()
+    query = Normalize_Search_Query_Text(original)
+    query = query.replace("’", "'")
+
+    patterns = [
+        r"\bs\s*'?\s*il\s+(te|vous)\s+pla[iî]t\b",
+        r"\b(stp|svp|merci)\b",
+        r"\best[\s-]*ce\s+que\b",
+        r"\btu\s+peux\b",
+        r"\bpouvez\s+vous\b",
+        r"\bpeux\s+tu\b",
+        r"\brappelle(?:s)?(?:\s*toi)?\b",
+        r"\bsouviens(?:\s*toi)?\b",
+        r"\bsais(?:\s*tu)?\b",
+        r"\bce\s+qu\s+on\s+(a|avait)?\s*(dit|vu|cherche|trouve|explique|parle)\b",
+        r"\bqu\s+on\s+(a|avait)?\s*(dit|vu|cherche|trouve|explique|parle)\b",
+        r"\bce\s+dont\s+on\s+(a|avait)?\s*parle\b",
+        r"\bdont\s+on\s+(a|avait)?\s*parle\b",
+        r"\bon\s+(a|avait)?\s*(dit|vu|cherche|trouve|explique|parle)\b",
+        r"\bcherche(?:r|z|-moi|s)?\b",
+        r"\btrouve(?:r|z|-moi|s)?\b",
+        r"\bregarde(?:r|z|-moi|s)?\b",
+        r"\bverifie(?:r|z|-moi|s)?\b",
+        r"\bparle(?:r|z|s)?\b",
+        r"\bdit\b",
+        r"\brecherche(?:r|s)?\b",
+        r"\bdans\s+l\s+historique\b",
+        r"\bl\s+historique\b",
+        r"\bhistorique\b",
+        r"\b(deja|avec toi|avec vous|ensemble)\b",
+    ]
+    for pattern in patterns:
+        query = re.sub(pattern, " ", query)
+
+    query = re.sub(r"[^0-9a-zA-ZÀ-ÿ]+", " ", query)
+    query = re.sub(
+        r"\b(sur|dans|avec|a|au|aux|de|des|du|d|la|le|les|l|un|une|s|ce|cet|cette|ces|que|qu|qui|quoi|on|nous|vous|tu|te|t|moi|mon|ma|mes|ton|ta|tes|votre|vos|notre|nos|en|y)\b",
+        " ",
+        query,
+    )
+    query = re.sub(r"\s+", " ", query).strip()
+    return query or original
+
+
+def Normalize_History_Search_Text(txt):
+    return Normalize_Search_Query_Text(txt)
 
 
 def Google_Result_Item(title=None, description=None, url=None):
@@ -7599,7 +7660,7 @@ def Delete_Last_History_Entry():
 
 
 def Search_History(to_search):
-    to_search = Isolate_Search(to_search,"F_search_history")
+    to_search = Clean_History_Search_Query(Isolate_Search(to_search,"F_search_history"))
 
     PRINT("\n-Trinitty:Dans la fonction SearchHistory to_search %s in history." % to_search)
 
@@ -7618,6 +7679,9 @@ def Search_History(to_search):
         hist_urls = args["hist_urls"]
         hist_epok = args["hist_epok"]
         hist_tstamp = args["hist_tstamp"]
+        hist_input_full_search = Normalize_History_Search_Text(hist_input_full)
+        hist_input_short_search = Normalize_History_Search_Text(hist_input_short)
+        hist_output_search = Normalize_History_Search_Text(hist_output)
 
         bingoat = 0
         if " " in to_search:
@@ -7630,33 +7694,33 @@ def Search_History(to_search):
                 else:
                     word = " %s " % raw_word
 
-                if word in hist_input_full.lower():
+                if word in hist_input_full_search:
                     PRINT("\n-Trinitty:Search_History:found partial result in hist_input_full:[%s]" % word)
                     bingoat += 1
-                if word in hist_input_short.lower():
+                if word in hist_input_short_search:
                     PRINT("\n-Trinitty:Search_History:found partial result in hist_input_short:[%s]" % word)
                     bingoat += 1
-                if word in hist_output.lower():
+                if word in hist_output_search:
                     PRINT("\n-Trinitty:Search_History:found partial result in hist_output:[%s]" % word)
                     bingoat += 1
 
-            if to_search in hist_input_full.lower():
+            if to_search in hist_input_full_search:
                 PRINT("\n-Trinitty:Search_History:full match in hist_input_full:[%s]" % to_search)
                 bingoat += 5
-            if to_search in hist_input_short.lower():
+            if to_search in hist_input_short_search:
                 PRINT("\n-Trinitty:Search_History:full match in hist_input_short:[%s]" % to_search)
                 bingoat += 5
-            if to_search in hist_output.lower():
+            if to_search in hist_output_search:
                 PRINT("\n-Trinitty:Search_History:full match in hist_output:[%s]" % to_search)
                 bingoat += 5
         else:
-            if to_search in hist_input_full.lower():
+            if to_search in hist_input_full_search:
                 PRINT("\n-Trinitty:Search_History:full match in hist_input_full:[%s]" % to_search)
                 bingoat += 1
-            if to_search in hist_input_short.lower():
+            if to_search in hist_input_short_search:
                 PRINT("\n-Trinitty:Search_History:full match in hist_input_short:[%s]" % to_search)
                 bingoat += 1
-            if to_search in hist_output.lower():
+            if to_search in hist_output_search:
                 PRINT("\n-Trinitty:Search_History:full match in hist_output:[%s]" % to_search)
                 bingoat += 1
 
