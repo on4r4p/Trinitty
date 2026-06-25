@@ -220,6 +220,24 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 self.assertTrue(updated_conf.startswith("OPENAI_MODEL = custom-user-model\n"))
                 self.assertIn("SPACY_MODEL = fr_core_news_md", updated_conf)
                 self.assertIn("XCB_ERROR_FIX = True", updated_conf)
+                for expected_key in [
+                    "WEB_SEARCH_TIMEOUT",
+                    "READ_LINK_TIMEOUT",
+                    "STT_TRANSCRIPT_CONFIDENCE_MIN",
+                    "STT_WORD_CONFIDENCE_MIN",
+                    "STT_AVG_WORD_CONFIDENCE_MIN",
+                    "STT_BAD_WORD_RATIO_MAX",
+                    "STT_BAD_WORD_COUNT_MAX",
+                    "STT_DEBUG",
+                    "STT_LOCAL_FALLBACK_ENABLED",
+                    "TTS_CACHE_ENABLED",
+                    "RESPONSE_STREAMING_ENABLED",
+                    "RESPONSE_STREAM_MIN_CHARS",
+                    "RESPONSE_STREAM_MAX_CHARS",
+                    "HISTORY_INDEX_ENABLED",
+                    "HISTORY_INDEX_PATH",
+                ]:
+                    self.assertIn("%s =" % expected_key, updated_conf)
             finally:
                 if original_home is None:
                     os.environ.pop("HOME", None)
