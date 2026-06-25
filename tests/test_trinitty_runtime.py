@@ -3,6 +3,7 @@ import importlib.util
 import contextlib
 import io
 import os
+import base64
 import subprocess
 import tempfile
 import time
@@ -2162,6 +2163,82 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertEqual("Albert Einstein", hub_call[1][0]["google_title"])
         self.assertEqual("https://example.invalid/einstein", hub_call[1][0]["google_url"])
         self.assertNotIn("play", [call[0] for call in calls])
+
+    def test_web_fallback_tries_post_when_duckduckgo_get_returns_202(self):
+        reset_command_state()
+        class Response:
+            def __init__(self, text="", status_code=200):
+                self.text = text
+                self.status_code = status_code
+
+        html = """
+        <html><body>
+          <div class="result">
+            <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fminecraft.wiki%2Fw%2FEnder_dragon">
+              Ender Dragon - Minecraft Wiki
+            </a>
+          </div>
+        </body></html>
+        """
+
+        calls = []
+        original_get = trinitty.requests.get
+        original_post = trinitty.requests.post
+        trinitty.requests.get = lambda url, **kwargs: calls.append(("get", url, kwargs)) or Response(status_code=202)
+        trinitty.requests.post = lambda url, **kwargs: calls.append(("post", url, kwargs)) or Response(text=html)
+        try:
+            results = trinitty.Fallback_Web_Search("minecraft dragon ender", rnbr=1)
+        finally:
+            trinitty.requests.get = original_get
+            trinitty.requests.post = original_post
+
+        self.assertEqual([("get", "https://html.duckduckgo.com/html/"), ("post", "https://html.duckduckgo.com/html/")], [
+            (call[0], call[1]) for call in calls[:2]
+        ])
+        self.assertEqual("Ender Dragon - Minecraft Wiki", results[0]["google_title"])
+        self.assertEqual("https://minecraft.wiki/w/Ender_dragon", results[0]["google_url"])
+
+    def test_web_fallback_uses_bing_when_duckduckgo_returns_202(self):
+        reset_command_state()
+        class Response:
+            def __init__(self, text="", status_code=200):
+                self.text = text
+                self.status_code = status_code
+
+        target = "https://minecraft.wiki/w/Ender_dragon"
+        encoded_target = "a1" + base64.urlsafe_b64encode(target.encode()).decode().rstrip("=")
+        bing_html = f"""
+        <html><body>
+          <ol>
+            <li class="b_algo">
+              <h2><a href="https://www.bing.com/ck/a?u={encoded_target}">Ender Dragon - Minecraft Wiki</a></h2>
+              <div class="b_caption"><p>Article Minecraft Wiki.</p></div>
+            </li>
+          </ol>
+        </body></html>
+        """
+
+        calls = []
+        original_get = trinitty.requests.get
+        original_post = trinitty.requests.post
+
+        def fake_get(url, **kwargs):
+            calls.append(("get", url, kwargs))
+            if "bing.com" in url:
+                return Response(text=bing_html)
+            return Response(status_code=202)
+
+        trinitty.requests.get = fake_get
+        trinitty.requests.post = lambda url, **kwargs: calls.append(("post", url, kwargs)) or Response(status_code=202)
+        try:
+            results = trinitty.Fallback_Web_Search("minecraft dragon ender", rnbr=1)
+        finally:
+            trinitty.requests.get = original_get
+            trinitty.requests.post = original_post
+
+        self.assertEqual("Ender Dragon - Minecraft Wiki", results[0]["google_title"])
+        self.assertEqual(target, results[0]["google_url"])
+        self.assertIn(("get", "https://www.bing.com/search"), [(call[0], call[1]) for call in calls])
 
     def test_get_title_link_uses_web_fallback_with_site_filter(self):
         reset_command_state()

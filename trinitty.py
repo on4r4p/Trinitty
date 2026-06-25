@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import csv
+import base64
 import html
 import importlib
 from importlib import metadata as importlib_metadata
@@ -5127,7 +5128,10 @@ SEARCH_HTTP_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64; rv:126.0) "
         "Gecko/20100101 Firefox/126.0"
-    )
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
 }
 
 
@@ -5166,6 +5170,17 @@ def Decode_Search_Result_Url(url):
         target = parse_qs(parsed.query).get("q", [""])[0]
         target = unquote(target).strip()
         return target if Search_Result_Url_Is_Usable(target) else ""
+    if parsed.netloc.endswith("bing.com") and parsed.path == "/ck/a":
+        target = parse_qs(parsed.query).get("u", [""])[0]
+        if target.startswith("a1"):
+            target = target[2:]
+        try:
+            target += "=" * (-len(target) % 4)
+            target = base64.urlsafe_b64decode(target).decode("utf-8", errors="ignore").strip()
+        except Exception as e:
+            Log_Error("Decode_Search_Result_Url:bing", e)
+            target = ""
+        return target if Search_Result_Url_Is_Usable(target) else ""
     return raw_url if Search_Result_Url_Is_Usable(raw_url) else ""
 
 
@@ -5201,44 +5216,109 @@ def Googlesearch_Module_Search(to_search, rnbr=10, site=None):
     return results
 
 
-def Fallback_Web_Search(to_search, rnbr=10, site=None):
-    PRINT("\n-Trinitty:Using fallback web search.")
-    results = []
-    try:
-        response = requests.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": to_search},
-            headers=SEARCH_HTTP_HEADERS,
-            timeout=10,
-        )
-        if response.status_code != 200:
-            PRINT("\n-Trinitty:Fallback web search status:%s" % response.status_code)
-            return results
+def Fallback_Search_Sources(to_search):
+    return [
+        {
+            "name": "duckduckgo-html-get",
+            "method": "get",
+            "url": "https://html.duckduckgo.com/html/",
+            "params": {"q": to_search},
+            "engine": "duckduckgo",
+        },
+        {
+            "name": "duckduckgo-html-post",
+            "method": "post",
+            "url": "https://html.duckduckgo.com/html/",
+            "data": {"q": to_search},
+            "engine": "duckduckgo",
+        },
+        {
+            "name": "bing",
+            "method": "get",
+            "url": "https://www.bing.com/search",
+            "params": {"q": to_search, "setlang": "fr-FR"},
+            "engine": "bing",
+        },
+    ]
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        seen_urls = set()
-        for link in soup.select("a.result__a, a.result-link"):
+
+def Fetch_Fallback_Search_Source(source):
+    kwargs = {"headers": SEARCH_HTTP_HEADERS, "timeout": 10}
+    if source["method"] == "post":
+        return requests.post(source["url"], data=source.get("data", {}), **kwargs)
+    return requests.get(source["url"], params=source.get("params", {}), **kwargs)
+
+
+def Extract_Fallback_Search_Results(response_text, engine, rnbr=10, site=None):
+    soup = BeautifulSoup(response_text, "html.parser")
+    results = []
+    seen_urls = set()
+
+    if engine == "bing":
+        nodes = soup.select("li.b_algo")
+        for node in nodes:
+            link = node.select_one("h2 a[href]")
+            if not link:
+                continue
             title = link.get_text(" ", strip=True)
             url = Decode_Search_Result_Url(link.get("href"))
             if not title or not url or url in seen_urls or not Search_Result_Matches_Site(url, site):
                 continue
-
-            container = link.find_parent(class_="result")
-            snippet = ""
-            if container:
-                snippet_node = container.select_one(".result__snippet")
-                if snippet_node:
-                    snippet = snippet_node.get_text(" ", strip=True)
-
+            snippet_node = node.select_one(".b_caption p")
+            snippet = snippet_node.get_text(" ", strip=True) if snippet_node else ""
             seen_urls.add(url)
-            PRINT("\n-Trinitty:fallback_web_result:", title)
             results.append(Google_Result_Item(title, snippet, url))
             if len(results) >= rnbr:
                 break
-    except Exception as e:
-        Log_Error("Fallback_Web_Search", e)
-        PRINT("\n-Trinitty:Fallback web search Error:", str(e))
+        return results
+
+    for link in soup.select("a.result__a, a.result-link"):
+        title = link.get_text(" ", strip=True)
+        url = Decode_Search_Result_Url(link.get("href"))
+        if not title or not url or url in seen_urls or not Search_Result_Matches_Site(url, site):
+            continue
+
+        container = link.find_parent(class_="result")
+        snippet = ""
+        if container:
+            snippet_node = container.select_one(".result__snippet")
+            if snippet_node:
+                snippet = snippet_node.get_text(" ", strip=True)
+
+        seen_urls.add(url)
+        results.append(Google_Result_Item(title, snippet, url))
+        if len(results) >= rnbr:
+            break
     return results
+
+
+def Fallback_Web_Search(to_search, rnbr=10, site=None):
+    PRINT("\n-Trinitty:Using fallback web search.")
+    for source in Fallback_Search_Sources(to_search):
+        try:
+            response = Fetch_Fallback_Search_Source(source)
+            if response.status_code != 200:
+                PRINT(
+                    "\n-Trinitty:Fallback web search %s status:%s"
+                    % (source["name"], response.status_code)
+                )
+                continue
+
+            results = Extract_Fallback_Search_Results(
+                response.text,
+                source["engine"],
+                rnbr=rnbr,
+                site=site,
+            )
+            if results:
+                for result in results:
+                    PRINT("\n-Trinitty:fallback_web_result:", result["google_title"])
+                return results
+            PRINT("\n-Trinitty:Fallback web search %s no parsed result" % source["name"])
+        except Exception as e:
+            Log_Error("Fallback_Web_Search:%s" % source["name"], e)
+            PRINT("\n-Trinitty:Fallback web search %s Error:%s" % (source["name"], str(e)))
+    return []
 
 
 def Search_Result_Title(results):
