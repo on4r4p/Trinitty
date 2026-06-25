@@ -185,10 +185,66 @@ exec %s -m trinitty "$@"
     return launcher_path
 
 
+def Trinitty_Help_Text():
+    user_root = User_Data_Root()
+    user_conf = os.path.join(user_root, "datas", "conf.trinity")
+    keys_dir = os.path.join(user_root, "keys")
+    installer = Install_Dependencies_User_Path(user_root)
+    package_conf = Packaged_Config_File()
+
+    return """Trinitty - aide
+
+Usage terminal:
+  trinitty                       Lance l'assistant vocal.
+  trinitty -h, trinitty --help   Affiche cette aide.
+  trinitty --dependency-help     Affiche les commandes de réparation des dépendances.
+  trinitty --install-launcher    Crée le lanceur propre dans ~/.local/bin/trinitty.
+
+Commandes vocales utiles:
+  "affiche ton aide"                         Affiche cette aide et joue l'aide audio.
+  "fais une recherche internet sur ..."      Recherche sur le web.
+  "fais une recherche wikipedia sur ..."     Recherche sur Wikipedia.
+  "affiche l'historique"                     Affiche les échanges enregistrés.
+  "cherche dans l'historique ..."            Recherche dans les anciens échanges.
+  "répète"                                   Relit la dernière réponse.
+  "invite de commande"                       Passe en saisie clavier.
+  "quitte ton programme"                     Arrête Trinitty.
+
+Avec les résultats web, Wikipedia ou historique:
+  "lis le résultat numéro 3"      Lit le résultat sélectionné.
+  "ouvre le résultat numéro 3"    Ouvre le lien du résultat sélectionné.
+  "lis les trois premiers"        Lit plusieurs résultats.
+  "choisis au hasard"             Sélectionne un résultat au hasard.
+  "attends"                       Laisse les résultats affichés.
+  "quitte"                        Quitte l'écran de résultats.
+
+Configuration:
+  Dossier utilisateur: %s
+  Configuration modifiable: %s
+  Configuration fournie avec le package: %s
+  Dossier des clés: %s
+  Installateur de dépendances: %s
+
+Les fichiers existants dans le dossier utilisateur ne sont pas écrasés.
+""" % (user_root, user_conf, package_conf, keys_dir, installer)
+
+
+def Trinitty_Help(play_audio=True):
+    print(Trinitty_Help_Text())
+    if play_audio:
+        help_wav = os.path.join(globals().get("SCRIPT_PATH", Default_Script_Path()), "local_sounds", "saved_answer", "help.wav")
+        if os.path.exists(help_wav):
+            Play_Audio_File(help_wav)
+    return True
+
+
 def Handle_Utility_Args():
     if len(sys.argv) < 2:
         return False
     command = sys.argv[1]
+    if command in ("-h", "--help", "help"):
+        print(Trinitty_Help_Text())
+        return True
     if command == "--install-launcher":
         Install_User_Launcher()
         return True
@@ -4963,6 +5019,55 @@ def Read_Results_Command_Is_Specific(text):
     )
 
 
+def Normalize_Help_Command_Text(text):
+    normalized = str(text or "").lower()
+    try:
+        normalized = unidecode(normalized)
+    except Exception as e:
+        Log_Error("Normalize_Help_Command_Text", e)
+    normalized = normalized.replace("'", " ")
+    normalized = re.sub(r"[^0-9a-zA-ZÀ-ÿ]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def Detect_Trinitty_Help_Request(text):
+    normalized = Normalize_Help_Command_Text(text)
+    if not normalized:
+        return False
+
+    exact_requests = {
+        "aide",
+        "help",
+        "commandes",
+        "fonctions",
+        "fonctionnalites",
+        "possibilites",
+        "aide trinitty",
+        "aide trinity",
+    }
+    if normalized in exact_requests:
+        return True
+
+    capability_patterns = [
+        r"\bque peux tu faire\b",
+        r"\bque pouvez vous faire\b",
+        r"\bqu est ce que tu sais faire\b",
+        r"\bqu est ce que vous savez faire\b",
+        r"\ba quoi sers tu\b",
+        r"\ba quoi servez vous\b",
+    ]
+    if any(re.search(pattern, normalized) for pattern in capability_patterns):
+        return True
+
+    help_words = r"\b(aide|help|commande|commandes|fonction|fonctions|fonctionnalite|fonctionnalites|possibilite|possibilites)\b"
+    action_words = (
+        r"\b(affiche|affiches|affichez|montre|montres|montrez|liste|listes|listez|donne|donnes|donnez|"
+        r"explique|expliques|expliquez|presente|presentes|presentez|indique|indiques|indiquez|"
+        r"quelles|quels|quoi|comment)\b"
+    )
+    return bool(re.search(help_words, normalized) and re.search(action_words, normalized))
+
+
 def Results_Hub_Direct_Command(text, allowed_functions=None):
     normalized = Results_Hub_Normalize_Text(text)
     normalized = re.sub(r"[^a-z0-9]+", " ", normalized).strip()
@@ -5044,6 +5149,16 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
         if direct_results_command:
             PRINT("\n-Trinitty:Commandes():Results_Hub direct command:%s" % direct_results_command)
             return direct_results_command
+
+    if (
+        from_function != "Results_Hub"
+        and (allowed_functions is None or "F_trinity_help" in allowed_functions)
+        and Detect_Trinitty_Help_Request(decoded)
+    ):
+        PRINT("\n-Trinitty:Commandes():direct help command.")
+        if CMD_DBG or from_function:
+            return "F_trinity_help"
+        return Trinitty_Help()
 
     #    filter = ["s'il te plait","si te plait","sil te plait","merci"," stp "]
     #    to_remove = [" fais ","estce"," peux faire "," recherche ","faismoi"," fais ","peux ","fais recherche "," parle ","s'il te plait"," stp "," svp"," sur ","sil plait"]
@@ -5134,8 +5249,7 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             Prompt()
             return True
         if goto == "F_trinity_help":
-            Play_Audio_File(SCRIPT_PATH + "/local_sounds/saved_answer/help.wav")
-            return True
+            return Trinitty_Help()
 
         if goto == "F_trinity_script":
             Trinitty_Script()

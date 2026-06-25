@@ -32,11 +32,20 @@ F_trinity_dev,qui*vous a*appelé*maniere
 F_trinity_dev,qui*t'a*appelé*ainsi
 F_trinity_dev,qui*vous a*appelé*ainsi
 F_trinity_help,affiche*moi*ton aide
+F_trinity_help,affiche*ton aide
+F_trinity_help,affiches*ton aide
+F_trinity_help,affiche*aide
+F_trinity_help,affiches*aide
 F_trinity_help,affichez*moi*votre aide
+F_trinity_help,affichez*votre aide
 F_trinity_help,affiche*tes fonction
 F_trinity_help,affichez*vos fonction
 F_trinity_help,affiche*tes commande
 F_trinity_help,affichez*vos commande
+F_trinity_help,liste*tes commande
+F_trinity_help,listez*vos commande
+F_trinity_help,montre*tes commande
+F_trinity_help,montrez*vos commande
 F_trinity_help,quelles*sont*tes fonction
 F_trinity_help,quelles*sont*vos fonction
 F_trinity_help,a quoi*sers-tu

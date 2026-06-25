@@ -279,6 +279,40 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertIn("--no-venv", help_text)
             self.assertNotIn("--venv", help_text.replace("--no-venv", ""))
 
+    def test_cli_help_text_mentions_core_commands(self):
+        help_text = trinitty.Trinitty_Help_Text()
+
+        self.assertIn("trinitty -h", help_text)
+        self.assertIn("recherche internet", help_text)
+        self.assertIn("lis le résultat numéro 3", help_text)
+        self.assertIn(".local/share/Trinitty", help_text)
+
+    def test_handle_utility_args_prints_help(self):
+        original_argv = trinitty.sys.argv
+        try:
+            trinitty.sys.argv = ["trinitty", "-h"]
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertTrue(trinitty.Handle_Utility_Args())
+        finally:
+            trinitty.sys.argv = original_argv
+
+        self.assertIn("Trinitty - aide", output.getvalue())
+        self.assertIn("trinitty --dependency-help", output.getvalue())
+
+    def test_help_command_detects_affiche_ton_aide(self):
+        reset_command_state()
+        calls = []
+        original_help = trinitty.Trinitty_Help
+        trinitty.Trinitty_Help = lambda: calls.append("help") or True
+        try:
+            self.assertTrue(trinitty.Detect_Trinitty_Help_Request("Affiche ton aide affiches ton aide."))
+            self.assertTrue(trinitty.Commandes("Affiche ton aide affiches ton aide."))
+        finally:
+            trinitty.Trinitty_Help = original_help
+
+        self.assertEqual(["help"], calls)
+
     def test_auto_dependency_installer_runs_once_per_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

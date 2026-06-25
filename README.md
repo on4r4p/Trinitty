@@ -71,6 +71,19 @@ trinitty
 
 Le lanceur `~/.local/bin/trinitty` force automatiquement l'environnement propre nécessaire. Il utilise le Python du virtualenv, active `PYTHONNOUSERSITE=1` et vide `PYTHONPATH`.
 
+## Aide et commandes
+
+L'aide générale est disponible sans lancer l'assistant:
+
+```bash
+trinitty -h
+trinitty --help
+```
+
+Dans l'assistant, les commandes vocales comme `affiche ton aide`, `affiche tes commandes` ou `quelles sont tes fonctions` affichent cette aide et jouent l'aide audio.
+
+Après une recherche web, Wikipedia ou historique, les résultats restent pilotables par la voix: `lis le résultat numéro 3`, `ouvre le résultat numéro 3`, `lis les trois premiers`, `choisis au hasard`, `attends` ou `quitte`.
+
 ## Installation depuis le dépôt
 
 Depuis un checkout local, l'installateur crée ou réutilise un virtualenv, installe les dépendances Python, télécharge les données NLTK, installe le modèle spaCy français et peut installer les paquets système avec `--system`.
