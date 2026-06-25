@@ -2198,6 +2198,48 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertEqual("Ender Dragon - Minecraft Wiki", results[0]["google_title"])
         self.assertEqual("https://minecraft.wiki/w/Ender_dragon", results[0]["google_url"])
 
+    def test_web_fallback_uses_brave_after_duckduckgo_202(self):
+        reset_command_state()
+        class Response:
+            def __init__(self, text="", status_code=200):
+                self.text = text
+                self.status_code = status_code
+
+        brave_html = """
+        <html><body>
+          <div class="result-content">
+            <a class="l1" href="https://fr.minecraft.wiki/w/Ender_Dragon">
+              <div class="title">Ender Dragon - Le Minecraft Wiki</div>
+            </a>
+            <div class="generic-snippet">
+              <div class="content">L'Ender Dragon est un boss qui apparait dans l'End.</div>
+            </div>
+          </div>
+        </body></html>
+        """
+
+        calls = []
+        original_get = trinitty.requests.get
+        original_post = trinitty.requests.post
+
+        def fake_get(url, **kwargs):
+            calls.append(("get", url, kwargs))
+            if "search.brave.com" in url:
+                return Response(text=brave_html)
+            return Response(status_code=202)
+
+        trinitty.requests.get = fake_get
+        trinitty.requests.post = lambda url, **kwargs: calls.append(("post", url, kwargs)) or Response(status_code=202)
+        try:
+            results = trinitty.Fallback_Web_Search("dragon ender minecraft", rnbr=1)
+        finally:
+            trinitty.requests.get = original_get
+            trinitty.requests.post = original_post
+
+        self.assertEqual("Ender Dragon - Le Minecraft Wiki", results[0]["google_title"])
+        self.assertEqual("https://fr.minecraft.wiki/w/Ender_Dragon", results[0]["google_url"])
+        self.assertIn(("get", "https://search.brave.com/search"), [(call[0], call[1]) for call in calls])
+
     def test_web_fallback_uses_bing_when_duckduckgo_returns_202(self):
         reset_command_state()
         class Response:
@@ -2673,6 +2715,55 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.To_Gpt = original_to_gpt
 
         self.assertEqual(["phrase corrigee"], calls)
+
+    def test_question_detects_common_confirmation_without_sentiment_api(self):
+        reset_command_state()
+        reset_runtime_queues()
+        self.assertEqual((), trinitty.Question("Oui, c'est ça."))
+        self.assertIs(trinitty.Queue_Get_Optional(trinitty.score_sentiment, timeout=0.01), True)
+
+    def test_bad_confidence_accepts_confirmed_original_sentence(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+        trinitty.audio_datas.put(b"audio")
+        calls = []
+        original_play_audio_file = trinitty.Play_Audio_File
+        original_bad_stt = trinitty.Bad_Stt
+        original_start_thread_record = trinitty.Start_Thread_Record
+        original_wait_for = trinitty.Wait_for
+        original_speech_to_text = trinitty.Speech_To_Text
+        original_check_transcript = trinitty.Check_Transcript
+        original_to_gpt = trinitty.To_Gpt
+        trinitty.Play_Audio_File = lambda *_args, **_kwargs: None
+        trinitty.Bad_Stt = lambda *_args, **_kwargs: None
+        trinitty.Start_Thread_Record = lambda: True
+        trinitty.Wait_for = lambda *_args, **_kwargs: True
+        trinitty.Speech_To_Text = lambda _audio: ("Oui, c'est ça.", 0.9, ["Oui"], [0.9], "")
+        trinitty.Check_Transcript = lambda transcripts, *_args: (transcripts, True)
+        trinitty.To_Gpt = lambda text: calls.append(text) or "sent"
+        try:
+            self.assertEqual(
+                "sent",
+                trinitty.Bad_Confidence(
+                    "est-ce que tu peux faire une recherche internet sur comment battre le dragon de l'Ender dans minecraft"
+                ),
+            )
+        finally:
+            trinitty.Play_Audio_File = original_play_audio_file
+            trinitty.Bad_Stt = original_bad_stt
+            trinitty.Start_Thread_Record = original_start_thread_record
+            trinitty.Wait_for = original_wait_for
+            trinitty.Speech_To_Text = original_speech_to_text
+            trinitty.Check_Transcript = original_check_transcript
+            trinitty.To_Gpt = original_to_gpt
+
+        self.assertEqual(
+            [
+                "est-ce que tu peux faire une recherche internet sur comment battre le dragon de l'Ender dans minecraft"
+            ],
+            calls,
+        )
 
     def test_simulate_conversation_uses_injected_responder_without_command_side_effects(self):
         reset_command_state()

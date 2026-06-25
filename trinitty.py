@@ -5233,6 +5233,13 @@ def Fallback_Search_Sources(to_search):
             "engine": "duckduckgo",
         },
         {
+            "name": "brave",
+            "method": "get",
+            "url": "https://search.brave.com/search",
+            "params": {"q": to_search, "source": "web"},
+            "engine": "brave",
+        },
+        {
             "name": "bing",
             "method": "get",
             "url": "https://www.bing.com/search",
@@ -5265,6 +5272,25 @@ def Extract_Fallback_Search_Results(response_text, engine, rnbr=10, site=None):
             if not title or not url or url in seen_urls or not Search_Result_Matches_Site(url, site):
                 continue
             snippet_node = node.select_one(".b_caption p")
+            snippet = snippet_node.get_text(" ", strip=True) if snippet_node else ""
+            seen_urls.add(url)
+            results.append(Google_Result_Item(title, snippet, url))
+            if len(results) >= rnbr:
+                break
+        return results
+
+    if engine == "brave":
+        nodes = soup.select("div.result-content")
+        for node in nodes:
+            link = node.select_one("a.l1[href], a[href]")
+            if not link:
+                continue
+            title_node = node.select_one(".title")
+            title = title_node.get_text(" ", strip=True) if title_node else link.get_text(" ", strip=True)
+            url = Decode_Search_Result_Url(link.get("href"))
+            if not title or not url or url in seen_urls or not Search_Result_Matches_Site(url, site):
+                continue
+            snippet_node = node.select_one(".generic-snippet .content")
             snippet = snippet_node.get_text(" ", strip=True) if snippet_node else ""
             seen_urls.add(url)
             results.append(Google_Result_Item(title, snippet, url))
@@ -5822,11 +5848,8 @@ def Wikipedia(to_search, Title=None, FULL=None):
                             )
 
                     if len(txt) > 0:
-                        if "non" in txt.lower() and "oui" not in txt.lower():
-                            opinion = False
-                        elif "oui" in txt.lower() and "non" not in txt.lower():
-                            opinion = True
-                        else:
+                        opinion = Detect_Question_Opinion(txt)
+                        if opinion is None:
                             Question(txt)
                             if Wait_for("question"):
                                 opinion = Queue_Get_Optional(score_sentiment, timeout=0.2, default=None)
@@ -6050,9 +6073,74 @@ def Check_Transcript(transcripts, transcripts_confidence, words, words_confidenc
     return ("", False)
 
 
+def Normalize_Opinion_Text(txt):
+    text = str(txt or "").lower()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def Opinion_Text_Has_Phrase(normalized_text, phrase):
+    normalized_phrase = Normalize_Opinion_Text(phrase)
+    if not normalized_phrase:
+        return False
+    return re.search(r"(?:^|\s)%s(?:\s|$)" % re.escape(normalized_phrase), normalized_text) is not None
+
+
+def Detect_Question_Opinion(txt):
+    normalized = Normalize_Opinion_Text(txt)
+    if not normalized:
+        return None
+
+    positive_phrases = [
+        "oui",
+        "ouais",
+        "yes",
+        "yep",
+        "c est ca",
+        "c est bien ca",
+        "c est bon",
+        "exactement",
+        "tout a fait",
+        "tu as bien compris",
+        "vous avez bien compris",
+        "valide",
+        "confirme",
+    ]
+    negative_phrases = [
+        "non",
+        "no",
+        "nope",
+        "pas ca",
+        "pas du tout",
+        "c est pas ca",
+        "ce n est pas ca",
+        "ce n est pas bon",
+        "incorrect",
+        "faux",
+        "recommence",
+        "repete",
+    ]
+
+    positive = any(Opinion_Text_Has_Phrase(normalized, phrase) for phrase in positive_phrases)
+    negative = any(Opinion_Text_Has_Phrase(normalized, phrase) for phrase in negative_phrases)
+    if positive and not negative:
+        return True
+    if negative and not positive:
+        return False
+    return None
+
+
 def Question(txt):
 
     PRINT("\n-Trinitty:Dans la fonction Question")
+    lexical_opinion = Detect_Question_Opinion(txt)
+    if lexical_opinion is not None:
+        PRINT("\n-Trinitty:Question lexical opinion:%s" % lexical_opinion)
+        score_sentiment.put(lexical_opinion)
+        return ()
+
     score = 0
     try:
 
@@ -6103,11 +6191,8 @@ def Repeat(txt):
         "tu n'as rien compris",
     ]
 
-    if "oui" in txt.lower() and "non" not in txt.lower():
-        opinion = True
-    elif "non" in txt.lower() and "oui" not in txt.lower():
-        opinion = False
-    else:
+    opinion = Detect_Question_Opinion(txt)
+    if opinion is None:
         Question(txt)
         if Wait_for("question"):
             opinion = Queue_Get_Optional(score_sentiment, timeout=0.2, default=None)
