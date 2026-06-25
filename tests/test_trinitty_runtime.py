@@ -1543,6 +1543,13 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertFalse(trinitty.cancel_operation.empty())
         self.assertEqual(["start", "stop"], calls)
 
+    def test_playback_stop_command_detects_direct_stop_words(self):
+        reset_command_state()
+
+        self.assertTrue(trinitty.Playback_Stop_Command_Detected("stop"))
+        self.assertTrue(trinitty.Playback_Stop_Command_Detected("arrête"))
+        self.assertFalse(trinitty.Playback_Stop_Command_Detected("continue"))
+
     def test_playback_interrupt_listener_is_disabled_by_default(self):
         reset_command_state()
         reset_runtime_queues()
@@ -1558,7 +1565,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         original_start = trinitty.Start_Playback_Interrupt_Listener
         original_stop = trinitty.Stop_Playback_Interrupt_Listener
         original_play = trinitty.Play_Audio_File
-        trinitty.Start_Playback_Interrupt_Listener = lambda: calls.append("start") or "listener"
+        trinitty.Start_Playback_Interrupt_Listener = lambda force=False: calls.append(("start", force)) or "listener"
         trinitty.Stop_Playback_Interrupt_Listener = lambda listener: calls.append(("stop", listener))
         trinitty.Play_Audio_File = lambda filepath: calls.append(("play", filepath)) or 0
         try:
@@ -1568,7 +1575,33 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Stop_Playback_Interrupt_Listener = original_stop
             trinitty.Play_Audio_File = original_play
 
-        self.assertEqual(["start", ("play", audio_wav), ("stop", "listener")], calls)
+        self.assertEqual([("start", False), ("play", audio_wav), ("stop", "listener")], calls)
+
+    def test_repeat_response_forces_interrupt_listener_for_last_answer(self):
+        reset_command_state()
+        calls = []
+        original_start = trinitty.Start_Playback_Interrupt_Listener
+        original_stop = trinitty.Stop_Playback_Interrupt_Listener
+        original_play = trinitty.Play_Audio_File
+        trinitty.Start_Playback_Interrupt_Listener = lambda force=False: calls.append(("start", force)) or "listener"
+        trinitty.Stop_Playback_Interrupt_Listener = lambda listener: calls.append(("stop", listener))
+        trinitty.Play_Audio_File = lambda filepath: calls.append(("play", filepath)) or 0
+        try:
+            self.assertEqual(0, trinitty.Play_Repeat_Response())
+        finally:
+            trinitty.Start_Playback_Interrupt_Listener = original_start
+            trinitty.Stop_Playback_Interrupt_Listener = original_stop
+            trinitty.Play_Audio_File = original_play
+
+        self.assertEqual(
+            [
+                ("play", trinitty.SCRIPT_PATH + "/local_sounds/repeat/isaid.wav"),
+                ("start", True),
+                ("play", trinitty.Runtime_Tmp_Path("current_answer.wav")),
+                ("stop", "listener"),
+            ],
+            calls,
+        )
 
     def test_playback_interrupt_listener_is_disabled_in_push_to_talk(self):
         reset_command_state()
@@ -2851,6 +2884,31 @@ class TrinittyRuntimeTests(unittest.TestCase):
         reset_runtime_queues()
         self.assertEqual((), trinitty.Question("Oui, c'est ça."))
         self.assertIs(trinitty.Queue_Get_Optional(trinitty.score_sentiment, timeout=0.01), True)
+
+    def test_check_transcript_tolerates_one_low_confidence_word_when_phrase_is_confident(self):
+        reset_command_state()
+        text, final_confidence = trinitty.Check_Transcript(
+            "comment battre le dragon de l'Ender dans minecraft",
+            0.92,
+            ["comment", "battre", "le", "dragon", "de", "l'Ender", "dans", "minecraft"],
+            [0.98, 0.97, 0.99, 0.99, 0.91, 0.22, 0.97, 0.98],
+            "",
+        )
+
+        self.assertEqual("comment battre le dragon de l'Ender dans minecraft", text)
+        self.assertTrue(final_confidence)
+
+    def test_check_transcript_rejects_many_low_confidence_words(self):
+        reset_command_state()
+        _text, final_confidence = trinitty.Check_Transcript(
+            "phrase trop incertaine pour etre acceptee",
+            0.92,
+            ["phrase", "trop", "incertaine", "pour", "etre", "acceptee"],
+            [0.98, 0.21, 0.22, 0.24, 0.95, 0.96],
+            "",
+        )
+
+        self.assertFalse(final_confidence)
 
     def test_bad_confidence_accepts_confirmed_original_sentence(self):
         reset_command_state()

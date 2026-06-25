@@ -983,6 +983,8 @@ COMMAND_CLASSIFIER_MODEL = None
 STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
 STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
+STT_BAD_WORD_RATIO_MAX = 0.25
+STT_BAD_WORD_COUNT_MAX = 2
 GOOGLE_STT_TIMEOUT = 20.0
 GOOGLE_LANGUAGE_TIMEOUT = 8.0
 HISTORY_CLASSIFICATION_ENABLED = True
@@ -2378,8 +2380,7 @@ def wake_up():
     if keyword_index == 1:
         return Prompt()
     if keyword_index == 2:
-        Play_Audio_File(SCRIPT_PATH + "/local_sounds/repeat/isaid.wav")
-        Play_Audio_File(Runtime_Tmp_Path("current_answer.wav"))
+        Play_Repeat_Response()
         return wake_up()
     return None
 
@@ -5252,8 +5253,7 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             Play_Audio_File(ouinon)
             return True
         if goto == "F_repeat":
-            Play_Audio_File(SCRIPT_PATH + "/local_sounds/repeat/isaid.wav")
-            Play_Audio_File(Runtime_Tmp_Path("current_answer.wav"))
+            Play_Repeat_Response()
             return True
 
         if goto == "F_prompt":
@@ -6253,8 +6253,22 @@ def Check_Transcript(transcripts, transcripts_confidence, words, words_confidenc
             final_confidence = False
             PRINT("\n-Trinitty:Average words confidence is too low\n.")
         if bad_word:
-            final_confidence = False
-            PRINT("\n-Trinitty:Some words have bad confidence:%s" % bad_word)
+            word_count = max(len(words_confidence), 1)
+            bad_word_ratio = len(bad_word) / word_count
+            bad_word_is_tolerable = (
+                final_confidence
+                and avg_conf >= STT_AVG_WORD_CONFIDENCE_MIN
+                and len(bad_word) <= STT_BAD_WORD_COUNT_MAX
+                and bad_word_ratio <= STT_BAD_WORD_RATIO_MAX
+            )
+            if bad_word_is_tolerable:
+                PRINT(
+                    "\n-Trinitty:Some words have bad confidence but transcript is accepted:%s"
+                    % bad_word
+                )
+            else:
+                final_confidence = False
+                PRINT("\n-Trinitty:Some words have bad confidence:%s" % bad_word)
 
         return (transcripts.replace("\\", ""), final_confidence)
 
@@ -6884,17 +6898,34 @@ def Playback_Stop_Command_Detected(text):
     text = str(text or "").strip()
     if not text:
         return False
+    normalized = Normalize_Help_Command_Text(text)
+    if normalized in {
+        "stop",
+        "stoppe",
+        "stoppes",
+        "stoppez",
+        "arrete",
+        "arretes",
+        "arretez",
+        "arrête",
+        "arrêtes",
+        "arrêtez",
+        "pause",
+        "tais toi",
+        "taisez vous",
+    }:
+        return True
     ambiguity = Check_Ambiguity(text, allowed_functions=["F_wait", "F_quit"])
     if not ambiguity:
         return False
     return "F_wait" in ambiguity or "F_quit" in ambiguity
 
 
-def Playback_Interrupt_Listener(stop_event, timeout=None):
+def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
     if (
         globals().get("INTERPRETOR", False)
         or globals().get("PUSH_TO_TALK", False)
-        or not globals().get("PLAYBACK_INTERRUPT_ENABLED", False)
+        or (not force and not globals().get("PLAYBACK_INTERRUPT_ENABLED", False))
     ):
         return False
 
@@ -6927,17 +6958,18 @@ def Playback_Interrupt_Listener(stop_event, timeout=None):
     return False
 
 
-def Start_Playback_Interrupt_Listener():
+def Start_Playback_Interrupt_Listener(force=False):
     if (
         globals().get("INTERPRETOR", False)
         or globals().get("PUSH_TO_TALK", False)
-        or not globals().get("PLAYBACK_INTERRUPT_ENABLED", False)
+        or (not force and not globals().get("PLAYBACK_INTERRUPT_ENABLED", False))
     ):
         return None
+    Queue_Drain(cancel_operation)
     Queue_Drain(audio_datas)
     Queue_Drain(No_Input)
     stop_event = Event()
-    listener = Thread(target=Playback_Interrupt_Listener, args=(stop_event,), daemon=True)
+    listener = Thread(target=Playback_Interrupt_Listener, args=(stop_event,), kwargs={"force": force}, daemon=True)
     listener.start()
     return (stop_event, listener)
 
@@ -7007,15 +7039,24 @@ def Play_Audio_File(filepath, cancel_event=None):
     return Run_Playback_Command([PLAY_BIN, "-q", filepath], cancel_event=cancel_event)
 
 
+def Play_Audio_File_With_Interrupt(filepath, force=False):
+    listener = Start_Playback_Interrupt_Listener(force=force)
+    try:
+        return Play_Audio_File(filepath)
+    finally:
+        Stop_Playback_Interrupt_Listener(listener)
+
+
+def Play_Repeat_Response():
+    Play_Audio_File(SCRIPT_PATH + "/local_sounds/repeat/isaid.wav")
+    return Play_Audio_File_With_Interrupt(Runtime_Tmp_Path("current_answer.wav"), force=True)
+
+
 def Play_Response(audio_response=None, stay_awake=False, save_history=True, answer_txt=None):
     PRINT("\n-Trinitty:Dans la fonction Play_Response")
 
     if audio_response:
-        listener = Start_Playback_Interrupt_Listener()
-        try:
-            Play_Audio_File(audio_response)
-        finally:
-            Stop_Playback_Interrupt_Listener(listener)
+        Play_Audio_File_With_Interrupt(audio_response)
 
     if save_history:
         if audio_response:
