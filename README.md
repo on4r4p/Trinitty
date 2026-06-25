@@ -144,10 +144,16 @@ Les fichiers les plus utiles y sont créés sans écraser l'existant:
 
 La configuration par défaut fournie avec le package est dans `datas/conf.trinity`. Pour éviter de publier des chemins ou préférences locales, placer les overrides dans `~/.local/share/Trinitty/datas/conf.trinity`.
 
-Au premier lancement après installation ou mise à jour, Trinitty lance automatiquement `~/.local/share/Trinitty/install_dependencies.sh` une seule fois pour la version installée. Pour désactiver cette vérification automatique:
+Par défaut, Trinitty ne lance plus l'installateur de dépendances au démarrage. Pour vérifier ou réparer les dépendances après une installation ou une mise à jour:
 
 ```bash
-export TRINITTY_SKIP_AUTO_INSTALL=1
+trinitty --check-install
+```
+
+L'ancien comportement peut être réactivé si nécessaire:
+
+```bash
+export TRINITTY_AUTO_INSTALL_DEPENDENCIES=1
 ```
 
 Exemple:

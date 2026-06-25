@@ -300,6 +300,47 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn("Trinitty - aide", output.getvalue())
         self.assertIn("trinitty --dependency-help", output.getvalue())
 
+    def test_auto_dependency_installer_is_disabled_by_default(self):
+        original_auto = os.environ.get("TRINITTY_AUTO_INSTALL_DEPENDENCIES")
+        original_skip = os.environ.get("TRINITTY_SKIP_AUTO_INSTALL")
+        try:
+            os.environ.pop("TRINITTY_AUTO_INSTALL_DEPENDENCIES", None)
+            os.environ.pop("TRINITTY_SKIP_AUTO_INSTALL", None)
+            self.assertFalse(trinitty.Auto_Dependency_Installer_Enabled())
+
+            os.environ["TRINITTY_AUTO_INSTALL_DEPENDENCIES"] = "1"
+            self.assertTrue(trinitty.Auto_Dependency_Installer_Enabled())
+
+            os.environ["TRINITTY_SKIP_AUTO_INSTALL"] = "1"
+            self.assertFalse(trinitty.Auto_Dependency_Installer_Enabled())
+        finally:
+            if original_auto is None:
+                os.environ.pop("TRINITTY_AUTO_INSTALL_DEPENDENCIES", None)
+            else:
+                os.environ["TRINITTY_AUTO_INSTALL_DEPENDENCIES"] = original_auto
+            if original_skip is None:
+                os.environ.pop("TRINITTY_SKIP_AUTO_INSTALL", None)
+            else:
+                os.environ["TRINITTY_SKIP_AUTO_INSTALL"] = original_skip
+
+    def test_check_install_argument_forces_dependency_installer(self):
+        calls = []
+        original_argv = trinitty.sys.argv
+        original_initialize = trinitty.Initialize_User_Data
+        original_auto_run = trinitty.Auto_Run_Dependency_Installer
+        try:
+            trinitty.sys.argv = ["trinitty", "--check-install"]
+            trinitty.Initialize_User_Data = lambda: "/tmp/trinitty-user"
+            trinitty.Auto_Run_Dependency_Installer = lambda root=None, force=False: calls.append((root, force)) or True
+
+            self.assertTrue(trinitty.Handle_Utility_Args())
+        finally:
+            trinitty.sys.argv = original_argv
+            trinitty.Initialize_User_Data = original_initialize
+            trinitty.Auto_Run_Dependency_Installer = original_auto_run
+
+        self.assertEqual([("/tmp/trinitty-user", True)], calls)
+
     def test_help_command_detects_affiche_ton_aide(self):
         reset_command_state()
         calls = []

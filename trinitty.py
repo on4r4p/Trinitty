@@ -197,6 +197,7 @@ def Trinitty_Help_Text():
 Usage terminal:
   trinitty                       Lance l'assistant vocal.
   trinitty -h, trinitty --help   Affiche cette aide.
+  trinitty --check-install       Vérifie/installe les dépendances locales.
   trinitty --dependency-help     Affiche les commandes de réparation des dépendances.
   trinitty --install-launcher    Crée le lanceur propre dans ~/.local/bin/trinitty.
 
@@ -244,6 +245,10 @@ def Handle_Utility_Args():
     command = sys.argv[1]
     if command in ("-h", "--help", "help"):
         print(Trinitty_Help_Text())
+        return True
+    if command == "--check-install":
+        root = Initialize_User_Data()
+        Auto_Run_Dependency_Installer(root, force=True)
         return True
     if command == "--install-launcher":
         Install_User_Launcher()
@@ -349,8 +354,8 @@ def Dependency_Installer_Stamp_Path(root=None):
 def Auto_Dependency_Installer_Enabled():
     if os.environ.get("TRINITTY_SKIP_AUTO_INSTALL"):
         return False
-    value = os.environ.get("TRINITTY_AUTO_INSTALL_DEPENDENCIES", "1").strip().lower()
-    return value not in ["0", "false", "no", "off"]
+    value = os.environ.get("TRINITTY_AUTO_INSTALL_DEPENDENCIES", "0").strip().lower()
+    return value in ["1", "true", "yes", "on"]
 
 
 def Current_Trinitty_Version_For_Installer():
@@ -379,9 +384,9 @@ def Mark_Dependency_Installer_Version(root=None, version=None):
         f.write(str(version).strip() + "\n")
 
 
-def Auto_Run_Dependency_Installer(root=None):
+def Auto_Run_Dependency_Installer(root=None, force=False):
     root = root or User_Data_Root()
-    if not Auto_Dependency_Installer_Enabled():
+    if not force and not Auto_Dependency_Installer_Enabled():
         PRINT("\n-Trinitty:Installation automatique des dépendances désactivée.")
         return False
 
@@ -399,7 +404,10 @@ def Auto_Run_Dependency_Installer(root=None):
         print("\n-Trinitty:Warning:install_dependencies.sh introuvable; dépendances non vérifiées.")
         return False
 
-    print("\n-Trinitty:Vérification/installation automatique des dépendances pour Trinitty %s." % version)
+    if force:
+        print("\n-Trinitty:Vérification/installation des dépendances pour Trinitty %s." % version)
+    else:
+        print("\n-Trinitty:Vérification/installation automatique des dépendances pour Trinitty %s." % version)
     print("-Trinitty:Commande: %s" % " ".join(shlex.quote(part) for part in command))
 
     env = os.environ.copy()
@@ -418,7 +426,10 @@ def Auto_Run_Dependency_Installer(root=None):
         return True
 
     print("\n-Trinitty:Warning:install_dependencies.sh a échoué avec le code %s." % result.returncode)
-    print("-Trinitty:Le prochain lancement réessaiera. Pour désactiver: TRINITTY_SKIP_AUTO_INSTALL=1")
+    if force:
+        print("-Trinitty:Relancez trinitty --check-install après correction.")
+    else:
+        print("-Trinitty:Le prochain lancement réessaiera. Pour désactiver: TRINITTY_SKIP_AUTO_INSTALL=1")
     Log_Error("Auto_Run_Dependency_Installer", "exit code %s" % result.returncode)
     return False
 
@@ -9243,7 +9254,8 @@ if __name__ == "__main__":
     SAVED_ANSWER = SCRIPT_PATH + "/local_sounds/saved_answer/"
 
     user_data_root = Initialize_User_Data()
-    Auto_Run_Dependency_Installer(user_data_root)
+    if Auto_Dependency_Installer_Enabled():
+        Auto_Run_Dependency_Installer(user_data_root)
     Configure_Default_Google_Credentials()
     GetConf()
     if DEBUG:
