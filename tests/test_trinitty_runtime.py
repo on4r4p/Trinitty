@@ -1122,6 +1122,38 @@ class TrinittyRuntimeTests(unittest.TestCase):
             ),
         )
 
+    def test_results_hub_directly_reads_numbered_result_command(self):
+        reset_command_state()
+
+        self.assertEqual(
+            "F_read_results",
+            trinitty.Commandes(
+                "Lis le résultat numéro 3.",
+                allowed_functions=["F_read_results", "F_read_link", "F_sort_results", "F_rnd", "F_wait", "F_quit"],
+                from_function="Results_Hub",
+            ),
+        )
+        self.assertEqual(
+            "F_read_results",
+            trinitty.Commandes(
+                "Lis le numéro 3.",
+                allowed_functions=["F_read_results", "F_read_link", "F_sort_results", "F_rnd", "F_wait", "F_quit"],
+                from_function="Results_Hub",
+            ),
+        )
+
+    def test_results_hub_directly_opens_numbered_result_command(self):
+        reset_command_state()
+
+        self.assertEqual(
+            "F_read_link",
+            trinitty.Commandes(
+                "Ouvre le résultat numéro 3.",
+                allowed_functions=["F_read_results", "F_read_link", "F_sort_results", "F_rnd", "F_wait", "F_quit"],
+                from_function="Results_Hub",
+            ),
+        )
+
     def test_results_hub_allowed_functions_do_not_mutate_command_scope(self):
         reset_command_state()
         trinitty.Loaded_Actions_Words_Requests = ["ferme"]

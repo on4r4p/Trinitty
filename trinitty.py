@@ -4963,6 +4963,64 @@ def Read_Results_Command_Is_Specific(text):
     )
 
 
+def Results_Hub_Direct_Command(text, allowed_functions=None):
+    normalized = Results_Hub_Normalize_Text(text)
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+    if not normalized:
+        return None
+
+    allowed = set(allowed_functions or [])
+    tokens = set(normalized.split())
+    has_result_scope = bool(
+        tokens.intersection(
+            {
+                "resultat",
+                "resultats",
+                "reponse",
+                "reponses",
+                "numero",
+                "numeros",
+                "num",
+                "n",
+            }
+        )
+    )
+    has_selection = Results_Hub_Selection_Range(normalized, 1000) is not None
+    if not has_result_scope and not has_selection:
+        return None
+
+    open_words = {
+        "ouvre",
+        "ouvrez",
+        "ouvrir",
+        "lien",
+        "liens",
+        "url",
+        "page",
+        "site",
+        "internet",
+    }
+    read_words = {
+        "lis",
+        "lire",
+        "lisez",
+        "dis",
+        "dites",
+        "parle",
+        "parlez",
+        "raconte",
+        "racontez",
+        "explique",
+        "expliquez",
+    }
+
+    if tokens.intersection(open_words) and (not allowed or "F_read_link" in allowed):
+        return "F_read_link"
+    if tokens.intersection(read_words) and (not allowed or "F_read_results" in allowed):
+        return "F_read_results"
+    return None
+
+
 def Commandes(txt=None,allowed_functions=None,from_function=None):
 
     direct_url = Extract_First_Url(txt)
@@ -4980,6 +5038,12 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             .replace("  ", " ")
             .replace(".", " ")
             )
+
+    if from_function == "Results_Hub":
+        direct_results_command = Results_Hub_Direct_Command(decoded, allowed_functions=allowed_functions)
+        if direct_results_command:
+            PRINT("\n-Trinitty:Commandes():Results_Hub direct command:%s" % direct_results_command)
+            return direct_results_command
 
     #    filter = ["s'il te plait","si te plait","sil te plait","merci"," stp "]
     #    to_remove = [" fais ","estce"," peux faire "," recherche ","faismoi"," fais ","peux ","fais recherche "," parle ","s'il te plait"," stp "," svp"," sur ","sil plait"]
