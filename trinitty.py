@@ -6984,9 +6984,13 @@ def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=N
     if globals().get("PUSH_TO_TALK", False):
         return Push_To_Talk()
 
-    if timeout is None:
+    if timeout is None and not self_launched:
         timeout = WAIT_FOR_TIMEOUT
-    deadline = time.monotonic() + float(timeout)
+    deadline = None
+    if timeout is not None:
+        timeout = float(timeout)
+        if timeout > 0:
+            deadline = time.monotonic() + timeout
 
     word_key = SCRIPT_PATH + "/models/trinity_fr_raspberry-pi_v3_0_0.ppn"
     word_key2 = SCRIPT_PATH + "/models/interpreteur_fr_raspberry-pi_v3_0_0.ppn"
@@ -7020,7 +7024,7 @@ def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=N
         )
         print("\n-Trinitty:En attente d'instruction...")
 
-        while time.monotonic() < deadline:
+        while deadline is None or time.monotonic() < deadline:
             pcm = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
             pcm = struct.unpack_from("h" * porcupine.frame_length, pcm)
             keyword_index = porcupine.process(pcm)

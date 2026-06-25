@@ -3650,6 +3650,73 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn("close", calls)
         self.assertIn("terminate", calls)
 
+    def test_wait_self_launched_has_no_default_timeout(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+        trinitty.PICO_KEY = "pico"
+        calls = []
+
+        class FakePorcupine:
+            sample_rate = 16000
+            frame_length = 2
+
+            def process(self, _pcm):
+                return 1
+
+            def delete(self):
+                calls.append("delete")
+
+        class FakeStream:
+            def read(self, frame_length, exception_on_overflow=False):
+                calls.append(("read", frame_length, exception_on_overflow))
+                return b"\x00\x00" * frame_length
+
+            def close(self):
+                calls.append("close")
+
+        class FakePyAudio:
+            def open(self, **_kwargs):
+                return FakeStream()
+
+            def terminate(self):
+                calls.append("terminate")
+
+        original_create = trinitty.pvporcupine.create
+        original_pyaudio = trinitty.pyaudio.PyAudio
+        original_play = trinitty.Play_Audio_File
+        original_prompt = trinitty.Prompt
+        original_monotonic = trinitty.time.monotonic
+        trinitty.pvporcupine.create = lambda **_kwargs: FakePorcupine()
+        trinitty.pyaudio.PyAudio = lambda: FakePyAudio()
+        trinitty.Play_Audio_File = lambda *_args, **_kwargs: 0
+        trinitty.Prompt = lambda allowed_functions=None, from_function=None: calls.append(
+            (allowed_functions, from_function)
+        ) or "prompt"
+        trinitty.time.monotonic = lambda: (_ for _ in ()).throw(
+            AssertionError("self-launched wait should not use a default timeout")
+        )
+        try:
+            self.assertEqual(
+                "prompt",
+                trinitty.Wait(
+                    self_launched=True,
+                    allowed_functions=["F_quit"],
+                    from_function="Results_Hub",
+                ),
+            )
+        finally:
+            trinitty.pvporcupine.create = original_create
+            trinitty.pyaudio.PyAudio = original_pyaudio
+            trinitty.Play_Audio_File = original_play
+            trinitty.Prompt = original_prompt
+            trinitty.time.monotonic = original_monotonic
+
+        self.assertIn((["F_quit"], "Results_Hub"), calls)
+        self.assertIn("delete", calls)
+        self.assertIn("close", calls)
+        self.assertIn("terminate", calls)
+
     def test_push_to_talk_waits_for_enter_then_records(self):
         reset_command_state()
         calls = []
