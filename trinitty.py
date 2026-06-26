@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import csv
+import ast
 import base64
 import hashlib
 import html
@@ -12,6 +13,7 @@ import os
 import random
 import re
 import runpy
+import select
 import shlex
 import signal
 import site
@@ -33,7 +35,7 @@ from datetime import datetime
 from shutil import copy2, copyfile, move, which
 
 from queue import Empty, Queue
-from threading import Event, Thread, current_thread, main_thread
+from threading import Event, RLock, Thread, current_thread, main_thread
 from contextlib import contextmanager
 
 from itertools import product
@@ -277,6 +279,7 @@ def Ensure_Command_Registry_Loaded():
 def Command_Function_Metadata():
     return [
         ("F_trinity_help", "Afficher l'aide generale", ["affiche ton aide"]),
+        ("F_trinity_script", "Interroger le script Trinitty", ["affiche la fonction Check_History"]),
         ("F_prompt", "Passer en saisie clavier", ["invite de commande"]),
         ("F_search_web", "Faire une recherche web", ["fais une recherche internet sur albert einstein"]),
         ("F_read_results", "Lire les resultats affiches", ["lis le resultat numero 3"]),
@@ -296,6 +299,7 @@ def Command_Function_Metadata():
 def Loaded_Command_Trigger_Count(function_name):
     mapping = {
         "F_trinity_help": "Loaded_Trinitty_Help_Requests",
+        "F_trinity_script": "Loaded_Trinitty_Script_Requests",
         "F_prompt": "Loaded_Prompt_Requests",
         "F_search_web": "Loaded_Search_Web_Requests",
         "F_read_results": "Loaded_Read_Results",
@@ -344,10 +348,133 @@ def Explain_Command_Text(phrase):
     return "\n".join(lines)
 
 
+def Doctor_Speaker_Check():
+    player = APLAY_BIN if which(APLAY_BIN) else PLAY_BIN
+    player_path = which(player) or ""
+    sample = Local_Sound_Path("boot", "xspx.wav")
+    if player_path:
+        detail = player_path
+        if os.path.exists(sample):
+            detail = "%s, son test disponible: %s" % (player_path, sample)
+        return True, detail
+    return False, "aplay/play introuvable"
+
+
+def Doctor_Microphone_Check():
+    if not Dependency_Available(pyaudio):
+        return False, "module pyaudio absent"
+    stream = None
+    pa = None
+    try:
+        with Audio_Device_Lock("doctor microphone"):
+            with ignoreStderr():
+                pa = pyaudio.PyAudio()
+            stream = pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=16000,
+                input=True,
+                frames_per_buffer=480,
+            )
+            stream.read(480, exception_on_overflow=False)
+        return True, "lecture micro courte OK"
+    except Exception as e:
+        Log_Error("Doctor_Microphone_Check", e)
+        return False, str(e)
+    finally:
+        if stream is not None:
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
+        if pa is not None:
+            try:
+                pa.terminate()
+            except Exception:
+                pass
+
+
+def Doctor_Vosk_Stop_Check():
+    if not Playback_Interrupt_Local_STT_Config_Enabled():
+        return True, "désactivé dans la configuration"
+    if not Dependency_Available(vosk):
+        return False, "module vosk absent"
+    model_path = Existing_Runtime_Model_Path(Configured_STT_Local_Model_Path())
+    if not model_path:
+        return False, Configured_STT_Local_Model_Path()
+    words = Playback_Interrupt_Config_List(globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_WORDS", ""))
+    normalized = {Normalize_Help_Command_Text(word) for word in words}
+    if not normalized.intersection({"stop", "arrete", "arrête"}):
+        return False, "mots stop/arrête absents"
+    return True, "modèle %s, mots: %s" % (model_path, ", ".join(words))
+
+
+def Doctor_Google_STT_Check():
+    if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        return False, "GOOGLE_APPLICATION_CREDENTIALS absent"
+    if not Dependency_Available(speech):
+        return False, "google-cloud-speech absent"
+    if not Config_Bool(os.environ.get("TRINITTY_DOCTOR_NETWORK", "False"), default=False):
+        return True, "SDK et credentials présents; test réseau désactivé"
+    try:
+        timeout = min(Config_Positive_Float(globals().get("GOOGLE_STT_TIMEOUT", 20.0), 20.0), 8.0)
+        client = Get_Google_Speech_Client()
+        audio = speech.RecognitionAudio(content=b"\0\0" * 16000)
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=16000,
+            language_code="fr-FR",
+        )
+        client.recognize(request={"config": config, "audio": audio}, timeout=timeout)
+        return True, "test Google STT silencieux OK"
+    except Exception as e:
+        Log_Error("Doctor_Google_STT_Check", e)
+        return False, str(e)
+
+
+def Doctor_OpenAI_Check():
+    api_key = Openai_Load_Key()
+    if not api_key:
+        return False, Openai_Key_Source_For_Log()
+    if not Dependency_Available(openai_module):
+        return False, "module openai absent"
+    if not Config_Bool(os.environ.get("TRINITTY_DOCTOR_NETWORK", "False"), default=False):
+        return True, "clé et SDK présents; test réseau désactivé"
+    try:
+        client = Get_OpenAI_Client(api_key=api_key, timeout=8)
+        response = client.responses.create(
+            model=str(globals().get("OPENAI_MODEL", "gpt-5.5")),
+            input="Réponds uniquement par OK.",
+            max_output_tokens=8,
+        )
+        text = Openai_Response_Text(response)
+        return bool(text), "réponse: %s" % (text or "vide")
+    except Exception as e:
+        Log_Error("Doctor_OpenAI_Check", e)
+        return False, str(e)
+
+
+def Doctor_Audio_And_Service_Checks():
+    checks = []
+    speaker_ok, speaker_detail = Doctor_Speaker_Check()
+    checks.append(("haut-parleur", speaker_ok, speaker_detail))
+    mic_ok, mic_detail = Doctor_Microphone_Check()
+    checks.append(("micro court", mic_ok, mic_detail))
+    vosk_ok, vosk_detail = Doctor_Vosk_Stop_Check()
+    checks.append(("Vosk stop/arrête", vosk_ok, vosk_detail))
+    google_ok, google_detail = Doctor_Google_STT_Check()
+    checks.append(("Google STT", google_ok, google_detail))
+    openai_ok, openai_detail = Doctor_OpenAI_Check()
+    checks.append(("OpenAI", openai_ok, openai_detail))
+    return checks
+
+
 def Trinitty_Doctor(fix=False):
     root = Initialize_User_Data()
     local_stt_enabled = Playback_Interrupt_Local_STT_Config_Enabled()
     local_stt_model_path = Configured_STT_Local_Model_Path()
+    g4f_ok = Ensure_Gpt4free_Runtime_Available()
     checks = []
     checks.append(("dossier utilisateur", os.path.isdir(root), root))
     checks.append(("configuration utilisateur", os.path.isfile(User_Data_Path("datas", "conf.trinity")), User_Data_Path("datas", "conf.trinity")))
@@ -356,9 +483,10 @@ def Trinitty_Doctor(fix=False):
     checks.append(("PyAudio", Audio_Input_Available(), "necessaire pour le micro"))
     checks.append(("Google credentials", bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")), "GOOGLE_APPLICATION_CREDENTIALS"))
     checks.append(("OpenAI key", bool(Openai_Load_Key()), Openai_Key_Source_For_Log()))
-    checks.append(("g4f import", Ensure_Gpt4free_Runtime_Available(), "fallback gpt4free"))
+    checks.append(("g4f import", g4f_ok, globals().get("GPT4FREE_RUNTIME_ERROR", "") or "fallback gpt4free"))
     checks.append(("Vosk import", (not local_stt_enabled) or Dependency_Available(vosk), "interruption stop/arrête locale"))
     checks.append(("modèle Vosk", (not local_stt_enabled) or bool(Existing_Runtime_Model_Path(local_stt_model_path)), local_stt_model_path))
+    checks.extend(Doctor_Audio_And_Service_Checks())
 
     print("Diagnostic Trinitty:")
     for label, ok, detail in checks:
@@ -1021,6 +1149,7 @@ def Subprocess_Returncode_Label(returncode):
 
 def Ensure_Gpt4free_Runtime_Available():
     global GPT4FREE_RUNTIME_AVAILABLE
+    global GPT4FREE_RUNTIME_ERROR
 
     cached = globals().get("GPT4FREE_RUNTIME_AVAILABLE", None)
     if cached is not None:
@@ -1039,7 +1168,8 @@ def Ensure_Gpt4free_Runtime_Available():
         )
     except Exception as e:
         GPT4FREE_RUNTIME_AVAILABLE = False
-        print("\n-Trinitty:Warning:gpt4free indisponible, fallback désactivé:%s" % str(e))
+        GPT4FREE_RUNTIME_ERROR = str(e)
+        print("\n-Trinitty:Warning:gpt4free indisponible, fallback désactivé:%s" % GPT4FREE_RUNTIME_ERROR)
         return False
 
     if probe.returncode != 0:
@@ -1048,10 +1178,12 @@ def Ensure_Gpt4free_Runtime_Available():
         if details:
             message = "%s: %s" % (message, details[-1])
         GPT4FREE_RUNTIME_AVAILABLE = False
+        GPT4FREE_RUNTIME_ERROR = message
         print("\n-Trinitty:Warning:gpt4free indisponible, fallback désactivé:%s" % message)
         return False
 
     GPT4FREE_RUNTIME_AVAILABLE = True
+    GPT4FREE_RUNTIME_ERROR = ""
     return True
 
 
@@ -1111,6 +1243,22 @@ def ignoreStderr():
     finally:
         os.dup2(old_stderr, 2)
         os.close(old_stderr)
+
+
+@contextmanager
+def Audio_Device_Lock(reason="audio"):
+    lock = globals().get("AUDIO_DEVICE_LOCK")
+    if lock is None:
+        yield
+        return
+    PRINT("\n-Trinitty:Audio_Device_Lock:%s" % str(reason or "audio"))
+    with lock:
+        yield
+
+
+def Release_Audio_Device_Lock(audio_lock=None, audio_lock_acquired=False):
+    if audio_lock is not None and audio_lock_acquired:
+        audio_lock.release()
 
 
 def Configure_Vosk_Log_Level():
@@ -1433,6 +1581,147 @@ def Local_STT_Fallback(audio):
         return ("", 0, [], [], "Local_STT_Fallback:%s" % str(e))
 
 
+def Wake_Word_Local_STT_Enabled():
+    return Config_Bool(globals().get("WAKE_WORD_LOCAL_STT_ENABLED", True), default=True)
+
+
+def Wake_Word_Config_Words():
+    words = Playback_Interrupt_Config_List(
+        globals().get(
+            "WAKE_WORD_LOCAL_STT_WORDS",
+            "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci",
+        )
+    )
+    defaults = ["trinitty", "trinity", "interpréteur", "interpreteur", "répète", "repete", "merci"]
+    return list(dict.fromkeys([*words, *defaults]))
+
+
+def Wake_Word_Fallback_Available():
+    if not Wake_Word_Local_STT_Enabled():
+        return False
+    if not Dependency_Available(vosk) or not Dependency_Available(pyaudio):
+        return False
+    return bool(Existing_Runtime_Model_Path(globals().get("STT_LOCAL_MODEL_PATH", "")))
+
+
+def Wake_Word_Command_From_Text(text):
+    normalized = Normalize_Help_Command_Text(text)
+    if not normalized:
+        return None
+    tokens = set(normalized.split())
+    if tokens.intersection({"interpreteur", "interpretteur", "clavier"}):
+        return 1
+    if tokens.intersection({"repete", "repeter", "redis", "redire"}):
+        return 2
+    if tokens.intersection({"merci"}):
+        return 3
+    if tokens.intersection({"trinitty", "trinity", "trin"}):
+        return 0
+    return None
+
+
+def Local_Wake_Word(timeout=None):
+    if not Wake_Word_Fallback_Available():
+        return None
+
+    words = Wake_Word_Config_Words()
+    grammar = json.dumps(list(dict.fromkeys([*words, "[unk]"])), ensure_ascii=False)
+    chunk_seconds = Config_Positive_Float(
+        globals().get("WAKE_WORD_LOCAL_STT_CHUNK_SECONDS", 0.5),
+        0.5,
+    )
+    frames_per_buffer = max(800, int(16000 * chunk_seconds))
+    if timeout is None:
+        timeout = Config_Positive_Float(globals().get("WAKE_WORD_LOCAL_STT_TIMEOUT", 0), 0.0)
+    timeout = float(timeout or 0)
+    deadline = time.monotonic() + timeout if timeout > 0 else None
+
+    recognizer = None
+    audio_stream = None
+    pa = None
+    audio_lock = globals().get("AUDIO_DEVICE_LOCK")
+    audio_lock_acquired = False
+
+    try:
+        model = Get_Vosk_Model()
+        recognizer = Vosk_Call(vosk.KaldiRecognizer, model, 16000, grammar)
+        if audio_lock is not None:
+            audio_lock.acquire()
+            audio_lock_acquired = True
+        with ignoreStderr():
+            pa = pyaudio.PyAudio()
+        audio_stream = pa.open(
+            rate=16000,
+            channels=1,
+            format=pyaudio.paInt16,
+            input=True,
+            frames_per_buffer=frames_per_buffer,
+        )
+        print("\n-Trinitty: En attente ...")
+        while deadline is None or time.monotonic() < deadline:
+            pcm = audio_stream.read(frames_per_buffer, exception_on_overflow=False)
+            if recognizer.AcceptWaveform(pcm):
+                text = Playback_Interrupt_Local_STT_Text(recognizer.Result())
+            else:
+                text = Playback_Interrupt_Local_STT_Text(recognizer.PartialResult(), key="partial")
+            keyword_index = Wake_Word_Command_From_Text(text)
+            if keyword_index is not None:
+                PRINT("\n-Trinitty:Local wake word Vosk:%s index:%s" % (text, keyword_index))
+                return keyword_index
+        return WAIT_TIMEOUT
+    except Exception as e:
+        Log_Error("Local_Wake_Word", e)
+        PRINT("\n-Trinitty:Local_Wake_Word:Error:%s" % str(e))
+        return None
+    finally:
+        if audio_stream is not None:
+            try:
+                audio_stream.close()
+            except Exception:
+                pass
+        if pa is not None:
+            try:
+                pa.terminate()
+            except Exception:
+                pass
+        Release_Audio_Device_Lock(audio_lock, audio_lock_acquired)
+
+
+def Local_Wake_Word_Loop(timeout=None, allowed_functions=None, from_function=None):
+    keyword_index = Local_Wake_Word(timeout=timeout)
+    if keyword_index is None:
+        return None
+    if keyword_index is WAIT_TIMEOUT:
+        return WAIT_TIMEOUT
+    if keyword_index == 0:
+        rnd = str(Non_Crypto_Randint(1, 15))
+        wake_sound = SCRIPT_PATH + "/local_sounds/wakesounds/" + rnd + ".wav"
+        Play_Audio_File(wake_sound)
+        return Trinitty("Speech_To_Text")
+    if keyword_index == 1:
+        return Prompt(allowed_functions, from_function)
+    if keyword_index == 2:
+        Play_Repeat_Response()
+        return Local_Wake_Word_Loop(timeout=timeout, allowed_functions=allowed_functions, from_function=from_function)
+    if keyword_index == 3:
+        rnd = str(Non_Crypto_Randint(1, 15))
+        thk_sound = SCRIPT_PATH + "/local_sounds/merci/" + rnd + ".wav"
+        Play_Audio_File(thk_sound)
+        return Local_Wake_Word_Loop(timeout=timeout, allowed_functions=allowed_functions, from_function=from_function)
+    return None
+
+
+def Wake_Fallback_Or_Push_To_Talk(timeout=None, allowed_functions=None, from_function=None):
+    if Wake_Word_Fallback_Available():
+        print("\n-Trinitty:Picovoice indisponible; utilisation du wake word local Vosk.")
+        result = Local_Wake_Word_Loop(timeout=timeout, allowed_functions=allowed_functions, from_function=from_function)
+        if result is not None:
+            return result
+    globals()["PUSH_TO_TALK"] = True
+    print("\n-Trinitty:Wake word indisponible; passage en mode PUSH_TO_TALK.")
+    return Push_To_Talk()
+
+
 def Save_STT_Debug(audio, provider, duration, transcripts, transcripts_confidence, words, words_confidence, err_msg):
     if not Config_Bool(globals().get("STT_DEBUG", False), default=False):
         return ""
@@ -1506,6 +1795,22 @@ def Debug_Log(message, other=None):
         return False
 
 
+def Runtime_Debug_Event(event, **fields):
+    if not globals().get("DEBUG", False):
+        return False
+    payload = {"event": str(event or "runtime")}
+    for key, value in fields.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            payload[key] = value
+        else:
+            payload[key] = str(value)
+    try:
+        return Debug_Log("RUNTIME %s" % json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    except Exception as e:
+        print("\n-Trinitty:Erreur dans Runtime_Debug_Event:", str(e), file=sys.stderr)
+        return False
+
+
 def PRINT(txt, other=None):
     tmp_txt = txt
     #   print("\n-Trinitty:Dans la fonction PRINT().")
@@ -1526,11 +1831,16 @@ QUEUE_MISSING = object()
 WAIT_FOR_TIMEOUT = 30.0
 WAIT_FOR_POLL_INTERVAL = 0.05
 PLAYBACK_POLL_INTERVAL = 0.05
+INTERPRETOR_INPUT_TIMEOUT = 120.0
 PLAYBACK_INTERRUPT_TIMEOUT = 30.0
 PLAYBACK_INTERRUPT_ENABLED = False
 PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
 PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+WAKE_WORD_LOCAL_STT_ENABLED = True
+WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
+WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
+WAKE_WORD_LOCAL_STT_TIMEOUT = 0.0
 PLAYBACK_INTERRUPT_JOIN_TIMEOUT = 2.0
 PLAYBACK_INTERRUPT_RELEASE_DELAY = 0.2
 PLAYBACK_INTERRUPT_LOCAL_STT_WARNINGS = set()
@@ -1553,6 +1863,8 @@ WEB_SEARCH_TIMEOUT = 10.0
 READ_LINK_TIMEOUT = 10.0
 PYPI_VERSION_TIMEOUT = 5.0
 GPT4FREE_PROBE_TIMEOUT = 15.0
+GPT4FREE_SUBPROCESS_ENABLED = True
+GPT4FREE_RUNTIME_ERROR = ""
 TTS_CACHE_ENABLED = True
 TTS_CACHE_DIR = "cache/tts"
 RESPONSE_STREAMING_ENABLED = True
@@ -1561,6 +1873,7 @@ RESPONSE_STREAM_MAX_CHARS = 450
 TTS_PARALLEL_WORKERS = 1
 HISTORY_INDEX_ENABLED = True
 HISTORY_INDEX_PATH = "cache/history_index.json"
+HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES = 120
 HISTORY_CLASSIFICATION_ENABLED = True
 RESULTS_HUB_MAX_ATTEMPTS = 2
 RESULTS_HUB_CONTINUE = object()
@@ -1583,6 +1896,10 @@ PREPROCESS_CACHE_MAX = 512
 HISTORY_INDEX_CACHE = None
 HISTORY_INDEX_SIGNATURE = None
 COMMAND_TRIGGER_INDEX = {}
+COMMAND_TRIGGER_INDEX_SIGNATURE = None
+SCRIPT_INDEX_CACHE = None
+SCRIPT_INDEX_SIGNATURE = None
+AUDIO_DEVICE_LOCK = RLock()
 
 
 def Queue_Get_Optional(queue_obj, timeout=0.2, default=QUEUE_MISSING):
@@ -1707,7 +2024,7 @@ def GoogleLoadKeys():
     return (GOOGLE_KEY, GOOGLE_ENGINE,GOOGLE_TRANSLATE)
 
 
-def parse_response(data):
+def parse_response(data, translate=True, play_translation_audio=True):
 
     PRINT("\n-Trinitty:Original Data before parse:\n", data)
 
@@ -1719,7 +2036,7 @@ def parse_response(data):
     google_translate = globals().get("GOOGLE_TRANSLATE", False)
 
 
-    if dlang_key and google_translate:
+    if translate and dlang_key and google_translate:
          try:
              input_lang = detectlanguage.simple_detect(data)
              PRINT("\n-Trinitty:detectlanguage:input_lang set to :",input_lang)
@@ -1727,7 +2044,7 @@ def parse_response(data):
             PRINT("\n-Trinitty:Error:detectlanguage.simple_detect:")
             PRINT(e)
 
-    if google_translate:
+    if translate and google_translate:
         if not input_lang:
              try:
                   client = translate_v2.Client()
@@ -1742,7 +2059,8 @@ def parse_response(data):
         if input_lang != "fr":
             try:
                data_translated = GoogleTranslator(source=input_lang, target='fr').translate(text=data)
-               Play_Audio_File(SCRIPT_PATH+"/local_sounds/trad/traduction.wav")
+               if play_translation_audio:
+                   Play_Audio_File(SCRIPT_PATH+"/local_sounds/trad/traduction.wav")
                PRINT("\n-Trinitty:GoogleTranslator:Translation successful.")
                data = data_translated
             except Exception as e:
@@ -1752,7 +2070,8 @@ def parse_response(data):
                       PRINT("\n-Trinitty:GoogleTranslator:Trying auto detect input language..")
                       try:
                          data_translated = GoogleTranslator(source="auto", target='fr').translate(text=data)
-                         Play_Audio_File(SCRIPT_PATH+"/local_sounds/trad/traduction.wav")
+                         if play_translation_audio:
+                             Play_Audio_File(SCRIPT_PATH+"/local_sounds/trad/traduction.wav")
                          PRINT("\n-Trinitty:GoogleTranslator:Translation successful.")
                          data = data_translated
                       except Exception as e:
@@ -2250,6 +2569,9 @@ def Filter_Gpt4free_Providers_For_Runtime(providers):
         return []
     if not Ensure_Gpt4free_Runtime_Available():
         return []
+    if Gpt4free_Should_Use_Subprocess():
+        PRINT("-Trinitty:gpt4free quarantine active; provider metadata filtering skipped in main process.")
+        return list(providers)
 
     filtered = list(providers)
     if GPT4FREE_SERVERS_STATUS == "All":
@@ -2264,6 +2586,96 @@ def Filter_Gpt4free_Providers_For_Runtime(providers):
             filtered.remove(provider)
             PRINT("-Trinitty:%s has been removed from servers to use" % provider)
     return filtered
+
+
+def Gpt4free_Should_Use_Subprocess():
+    if not Config_Bool(globals().get("GPT4FREE_SUBPROCESS_ENABLED", True), default=True):
+        return False
+    if isinstance(g4f, LazyOptionalModule):
+        return True
+    return getattr(g4f, "__name__", "") == "g4f"
+
+
+def Gpt4free_Request_Subprocess(provider_ref, request_input, timeout=10):
+    provider_name = str(provider_ref or "").replace("g4f.Provider.", "")
+    payload = {
+        "provider": provider_name,
+        "input": str(request_input or ""),
+        "timeout": Config_Positive_Float(timeout, 10.0),
+        "cookies_dir": Gpt4free_Cookies_Dir(),
+    }
+    code = r"""
+import json
+import sys
+
+payload = json.load(sys.stdin)
+try:
+    import g4f
+    try:
+        import g4f.cookies
+        cookies_dir = str(payload.get("cookies_dir") or "")
+        if cookies_dir:
+            g4f.cookies.set_cookies_dir(cookies_dir)
+            g4f.cookies.read_cookie_files(cookies_dir)
+    except Exception:
+        pass
+    provider_name = str(payload.get("provider") or "")
+    provider = getattr(g4f.Provider, provider_name)
+    response = g4f.ChatCompletion.create(
+        model=g4f.models.default,
+        provider=provider,
+        timeout=float(payload.get("timeout") or 10.0),
+        messages=[{"role": "user", "content": str(payload.get("input") or "")}],
+    )
+    print(json.dumps({"response": str(response or "")}, ensure_ascii=False))
+except Exception as exc:
+    print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+    sys.exit(2)
+"""
+    try:
+        run_timeout = Config_Positive_Float(timeout, 10.0) + 5.0
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            input=json.dumps(payload, ensure_ascii=False),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=run_timeout,
+            check=False,
+        )
+    except Exception as e:
+        return "", str(e)
+
+    output = (completed.stdout or "").strip().splitlines()
+    response_payload = {}
+    if output:
+        try:
+            response_payload = json.loads(output[-1])
+        except json.JSONDecodeError:
+            response_payload = {}
+    if completed.returncode != 0:
+        message = response_payload.get("error") or (completed.stderr or "").strip() or Subprocess_Returncode_Label(completed.returncode)
+        return "", message
+    if response_payload.get("error"):
+        return "", str(response_payload.get("error"))
+    return str(response_payload.get("response") or ""), ""
+
+
+def Gpt4free_Request(provider_ref, request_input, timeout=10):
+    if Gpt4free_Should_Use_Subprocess():
+        return Gpt4free_Request_Subprocess(provider_ref, request_input, timeout=timeout)
+    try:
+        response = g4f.ChatCompletion.create(
+            model=g4f.models.default,
+            provider=Resolve_Gpt4free_Provider(provider_ref),
+            timeout=timeout,
+            messages=[{"role": "user", "content": request_input}],
+        )
+        return str(response or ""), ""
+    except Exception as e:
+        return "", str(e)
 
 
 def Strip_Config_Inline_Comment(value):
@@ -2469,6 +2881,8 @@ def Gpt4free_Provider_Working(provider_name):
 def Load_Gpt4free_Cookies():
     cookies_dir = Gpt4free_Cookies_Dir()
     Sync_Gpt4free_Cookie_Captures(dest_dir=cookies_dir)
+    if Gpt4free_Should_Use_Subprocess():
+        return True
     set_cookies_dir(cookies_dir)
     return read_cookie_files(cookies_dir)
 
@@ -2526,6 +2940,33 @@ def Config_Positive_Float(value, default):
     except Exception:
         return default
     return parsed if parsed > 0 else default
+
+
+def Config_Nonnegative_Float(value, default):
+    try:
+        parsed = float(value)
+    except Exception:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def Input_With_Timeout(prompt, timeout=None):
+    if timeout is None:
+        timeout = globals().get("INTERPRETOR_INPUT_TIMEOUT", 120.0)
+    timeout = Config_Nonnegative_Float(timeout, 120.0)
+    if timeout <= 0:
+        return input(prompt)
+
+    print(prompt, end="", flush=True)
+    try:
+        readable, _writable, _error = select.select([sys.stdin], [], [], timeout)
+    except Exception as e:
+        PRINT("\n-Trinitty:Input_With_Timeout fallback:%s" % str(e))
+        return input("")
+    if not readable:
+        PRINT("\n-Trinitty:Input_With_Timeout:timeout:%s" % timeout)
+        return ""
+    return sys.stdin.readline()
 
 
 @contextmanager
@@ -2707,6 +3148,8 @@ def Gpt4free_Provider_Is_Text_Chat(provider, auth_mode="no_auth"):
 def Discover_Gpt4free_Text_Providers(auth_mode="no_auth"):
     if not Ensure_Gpt4free_Runtime_Available():
         return []
+    if Gpt4free_Should_Use_Subprocess():
+        return Discover_Gpt4free_Text_Providers_Subprocess(auth_mode)
 
     preferred_order = [
         "Qwen",
@@ -2769,6 +3212,140 @@ def Discover_Gpt4free_Text_Providers(auth_mode="no_auth"):
         ]
 
     return providers_to_return
+
+
+def Discover_Gpt4free_Text_Providers_Subprocess(auth_mode="no_auth"):
+    preferred_order = [
+        "Qwen",
+        "PollinationsAI",
+        "OpenaiChat",
+        "Yqcloud",
+        "Chatai",
+        "DeepInfra",
+        "LambdaChat",
+        "OperaAria",
+        "WeWordle",
+        "GLM",
+        "TeachAnything",
+        "ApiAirforce",
+        "GradientNetwork",
+        "ItalyGPT",
+        "Mintlify",
+        "OIVSCodeSer0501",
+        "OIVSCodeSer2",
+        "Perplexity",
+        "Yupp",
+    ]
+    fallback = [
+        "g4f.Provider.Qwen",
+        "g4f.Provider.PollinationsAI",
+        "g4f.Provider.Yqcloud",
+        "g4f.Provider.Chatai",
+        "g4f.Provider.DeepInfra",
+        "g4f.Provider.LambdaChat",
+        "g4f.Provider.OperaAria",
+        "g4f.Provider.WeWordle",
+        "g4f.Provider.GLM",
+    ]
+    payload = {
+        "auth_mode": Gpt4free_Auth_Mode(auth_mode),
+        "preferred_order": preferred_order,
+    }
+    code = r"""
+import json
+import sys
+
+payload = json.load(sys.stdin)
+auth_mode = str(payload.get("auth_mode") or "no_auth")
+preferred_order = list(payload.get("preferred_order") or [])
+
+def model_names(value):
+    if not value:
+        return []
+    if isinstance(value, dict):
+        return list(value.keys())
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value]
+    return [str(value)]
+
+def is_text_model(name):
+    lowered = str(name or "").lower()
+    return not any(token in lowered for token in ["image", "vision", "audio", "tts", "whisper"])
+
+def needs_auth(provider):
+    for attr in ["needs_auth", "login_url", "auth_url"]:
+        if getattr(provider, attr, None):
+            return True
+    return bool(getattr(provider, "cookies", None))
+
+try:
+    import g4f
+    providers = []
+    for provider in getattr(g4f.Provider, "__providers__", []):
+        name = getattr(provider, "__name__", "")
+        if not name:
+            continue
+        provider_needs_auth = needs_auth(provider)
+        if auth_mode == "no_auth" and provider_needs_auth:
+            continue
+        if auth_mode == "auth_only" and not provider_needs_auth:
+            continue
+        text_models = model_names(getattr(provider, "text_models", None))
+        default_model = getattr(provider, "default_model", None)
+        image_models = set(model_names(getattr(provider, "image_models", None)))
+        audio_models = set(model_names(getattr(provider, "audio_models", None)))
+        models = model_names(getattr(provider, "models", None))
+        ok = False
+        if text_models:
+            ok = True
+        elif default_model and not (default_model in image_models or default_model in audio_models):
+            ok = True
+        elif models and any(is_text_model(model) for model in models):
+            ok = True
+        elif getattr(provider, "supports_message_history", False) or getattr(provider, "supports_system_message", False):
+            ok = True
+        if ok:
+            providers.append("g4f.Provider.%s" % name)
+    def sort_key(provider_name):
+        name = provider_name.replace("g4f.Provider.", "")
+        if name in preferred_order:
+            return (0, preferred_order.index(name))
+        return (1, name.lower())
+    providers = sorted(dict.fromkeys(providers), key=sort_key)
+    print(json.dumps({"providers": providers}, ensure_ascii=False))
+except Exception as exc:
+    print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+    sys.exit(2)
+"""
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            input=json.dumps(payload, ensure_ascii=False),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=Config_Positive_Float(globals().get("GPT4FREE_PROBE_TIMEOUT", 15.0), 15.0),
+            check=False,
+        )
+    except Exception as e:
+        PRINT("\n-Trinitty:Discover_Gpt4free_Text_Providers_Subprocess:%s" % str(e))
+        return fallback
+
+    output = (completed.stdout or "").strip().splitlines()
+    payload_out = {}
+    if output:
+        try:
+            payload_out = json.loads(output[-1])
+        except json.JSONDecodeError:
+            payload_out = {}
+    providers = payload_out.get("providers")
+    if completed.returncode == 0 and isinstance(providers, list) and providers:
+        return [str(provider) for provider in providers]
+    message = payload_out.get("error") or (completed.stderr or "").strip() or Subprocess_Returncode_Label(completed.returncode)
+    PRINT("\n-Trinitty:Discover_Gpt4free_Text_Providers_Subprocess fallback:%s" % message)
+    return fallback
 
 
 def Refresh_Gpt4free_Providers_Config():
@@ -2913,7 +3490,6 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True, 
     if save_last_sentence:
         last_sentence.put(input)
 
-    response = ""
     response_text = ""
     successful_provider = None
 
@@ -2965,13 +3541,9 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True, 
              request_input = request_input + " . Réponds en français."
 
         try:
-            response = g4f.ChatCompletion.create(
-                model=g4f.models.default,
-                provider=Resolve_Gpt4free_Provider(provider_ref),
-                timeout=10,
-                messages=[{"role": "user", "content": request_input}],
-            )
-            response_text = str(response or "")
+            response_text, provider_error = Gpt4free_Request(provider_ref, request_input, timeout=10)
+            if provider_error:
+                raise RuntimeError(provider_error)
 
             if len(response_text) < 1:
                 PRINT(
@@ -2997,6 +3569,7 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True, 
 
             else:
                 successful_provider = provider_ref
+                Runtime_Debug_Event("response_provider", provider="g4f", detail=provider_ref)
                 break
 
         except Exception as e:
@@ -3036,8 +3609,16 @@ def wake_up():
     audio_stream = None
     pa = None
     wake_error = None
+    audio_lock = globals().get("AUDIO_DEVICE_LOCK")
+    audio_lock_acquired = False
+
+    if not globals().get("PICO_KEY") or not Dependency_Available(pvporcupine):
+        return Wake_Fallback_Or_Push_To_Talk()
 
     try:
+        if audio_lock is not None:
+            audio_lock.acquire()
+            audio_lock_acquired = True
         porcupine = pvporcupine.create(
             access_key=PICO_KEY,
             model_path=pvfr,
@@ -3085,24 +3666,32 @@ def wake_up():
     except Exception as e:
         wake_error = e
     finally:
-        if porcupine is not None:
-            porcupine.delete()
-        if audio_stream is not None:
-            audio_stream.close()
-        if pa is not None:
-            pa.terminate()
+        try:
+            if porcupine is not None:
+                porcupine.delete()
+        except Exception as e:
+            PRINT("\n-Trinitty:wake_up():porcupine delete error:%s" % str(e))
+        try:
+            if audio_stream is not None:
+                audio_stream.close()
+        except Exception as e:
+            PRINT("\n-Trinitty:wake_up():stream close error:%s" % str(e))
+        try:
+            if pa is not None:
+                pa.terminate()
+        except Exception as e:
+            PRINT("\n-Trinitty:wake_up():pa terminate error:%s" % str(e))
+        finally:
+            Release_Audio_Device_Lock(audio_lock, audio_lock_acquired)
 
     if wake_error is not None:
         Log_Error("wake_up", wake_error)
-        PUSH_TO_TALK = True
-        print("\n-Trinitty:Wake word unavailable; switching to PUSH_TO_TALK mode.")
-        return Push_To_Talk()
+        return Wake_Fallback_Or_Push_To_Talk()
 
     if keyword_index is None:
         print("\n-Trinitty:Error keyword_index = None")
         Log_Error("wake_up", "keyword_index=None")
-        PUSH_TO_TALK = True
-        return Push_To_Talk()
+        return Wake_Fallback_Or_Push_To_Talk()
     if keyword_index == 0:
         return Trinitty("Speech_To_Text")
     if keyword_index == 1:
@@ -3118,7 +3707,12 @@ def Record_Query():
 
     p = None
     stream = None
+    audio_lock = globals().get("AUDIO_DEVICE_LOCK")
+    audio_lock_acquired = False
     try:
+        if audio_lock is not None:
+            audio_lock.acquire()
+            audio_lock_acquired = True
         with ignoreStderr():
             p = pyaudio.PyAudio()
 
@@ -3156,7 +3750,11 @@ def Record_Query():
             except Exception as e:
                 PRINT("\n-Trinitty:Record_Query():stream close error:%s" % str(e))
         if p is not None:
-            p.terminate()
+            try:
+                p.terminate()
+            except Exception as e:
+                PRINT("\n-Trinitty:Record_Query():pyaudio terminate error:%s" % str(e))
+        Release_Audio_Device_Lock(audio_lock, audio_lock_acquired)
     return ()
 
 
@@ -5160,6 +5758,74 @@ def Build_Trigger_List_Index(list_elements):
     return {"size": len(list_elements), "index": indexed}
 
 
+def Command_Trigger_Cache_Path():
+    return Runtime_User_Path("cache/command_trigger_index.json", ("cache", "command_trigger_index.json"))
+
+
+def Command_Trigger_Source_Signature():
+    signature = []
+    for filepath in [CMDFILE, ALTFILE, TRIFILE, ACTFILE, PREFILE, SYNFILE]:
+        try:
+            stat = os.stat(filepath)
+            signature.append([os.path.abspath(filepath), stat.st_mtime, stat.st_size])
+        except OSError:
+            signature.append([os.path.abspath(filepath), 0, 0])
+    return signature
+
+
+def Command_Trigger_Lists_By_Name():
+    return {
+        "Loaded_Actions_Words_Requests": Loaded_Actions_Words_Requests,
+        "Loaded_Alternatives_Triggers": Loaded_Alternatives_Triggers,
+        "Loaded_Add_Triggers_Requests": Loaded_Add_Triggers_Requests,
+        "Loaded_Trinitty_Name_Requests": Loaded_Trinitty_Name_Requests,
+        "Loaded_Trinitty_Mean_Requests": Loaded_Trinitty_Mean_Requests,
+        "Loaded_Trinitty_Dev_Requests": Loaded_Trinitty_Dev_Requests,
+        "Loaded_Trinitty_Script_Requests": Loaded_Trinitty_Script_Requests,
+        "Loaded_Trinitty_Help_Requests": Loaded_Trinitty_Help_Requests,
+        "Loaded_Prompt_Requests": Loaded_Prompt_Requests,
+        "Loaded_Rnd_Requests": Loaded_Rnd_Requests,
+        "Loaded_Repeat_Requests": Loaded_Repeat_Requests,
+        "Loaded_Show_History_Requests": Loaded_Show_History_Requests,
+        "Loaded_Search_History_Requests": Loaded_Search_History_Requests,
+        "Loaded_Delete_Last_History_Requests": Loaded_Delete_Last_History_Requests,
+        "Loaded_Search_Web_Requests": Loaded_Search_Web_Requests,
+        "Loaded_Read_Link_Requests": Loaded_Read_Link_Requests,
+        "Loaded_Play_Audio_File_Requests": Loaded_Play_Audio_File_Requests,
+        "Loaded_Wait_Words_Requests": Loaded_Wait_Words_Requests,
+        "Loaded_Quit_Words_Requests": Loaded_Quit_Words_Requests,
+        "Loaded_Sort_Results_Requests": Loaded_Sort_Results_Requests,
+        "Loaded_Read_Results": Loaded_Read_Results,
+    }
+
+
+def Load_Command_Trigger_Index_Cache(signature):
+    cache_path = Command_Trigger_Cache_Path()
+    try:
+        with open(cache_path, encoding="utf-8") as f:
+            payload = json.load(f)
+        if payload.get("signature") != signature:
+            return None
+        indexes = payload.get("indexes", {})
+        if not isinstance(indexes, dict):
+            return None
+        return indexes
+    except Exception:
+        return None
+
+
+def Save_Command_Trigger_Index_Cache(indexes, signature):
+    cache_path = Command_Trigger_Cache_Path()
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({"signature": signature, "indexes": indexes}, f, ensure_ascii=False)
+        return True
+    except Exception as e:
+        Log_Error("Save_Command_Trigger_Index_Cache", e)
+        return False
+
+
 def Trigger_List_Candidates(var_to_check, list_elements):
     cache_key = id(list_elements)
     cached = COMMAND_TRIGGER_INDEX.get(cache_key)
@@ -5178,31 +5844,30 @@ def Trigger_List_Candidates(var_to_check, list_elements):
 
 
 def Compile_Command_Trigger_Index():
+    global COMMAND_TRIGGER_INDEX_SIGNATURE
+
     COMMAND_TRIGGER_INDEX.clear()
-    for command_list in [
-        Loaded_Actions_Words_Requests,
-        Loaded_Alternatives_Triggers,
-        Loaded_Add_Triggers_Requests,
-        Loaded_Trinitty_Name_Requests,
-        Loaded_Trinitty_Mean_Requests,
-        Loaded_Trinitty_Dev_Requests,
-        Loaded_Trinitty_Script_Requests,
-        Loaded_Trinitty_Help_Requests,
-        Loaded_Prompt_Requests,
-        Loaded_Rnd_Requests,
-        Loaded_Repeat_Requests,
-        Loaded_Show_History_Requests,
-        Loaded_Search_History_Requests,
-        Loaded_Delete_Last_History_Requests,
-        Loaded_Search_Web_Requests,
-        Loaded_Read_Link_Requests,
-        Loaded_Play_Audio_File_Requests,
-        Loaded_Wait_Words_Requests,
-        Loaded_Quit_Words_Requests,
-        Loaded_Sort_Results_Requests,
-        Loaded_Read_Results,
-    ]:
-        COMMAND_TRIGGER_INDEX[id(command_list)] = Build_Trigger_List_Index(command_list)
+    signature = Command_Trigger_Source_Signature()
+    lists_by_name = Command_Trigger_Lists_By_Name()
+    cached_indexes = Load_Command_Trigger_Index_Cache(signature)
+    indexes_for_cache = {}
+    if cached_indexes is not None:
+        for name, command_list in lists_by_name.items():
+            cached = cached_indexes.get(name)
+            if isinstance(cached, dict) and cached.get("size") == len(command_list):
+                COMMAND_TRIGGER_INDEX[id(command_list)] = cached
+                indexes_for_cache[name] = cached
+            else:
+                rebuilt = Build_Trigger_List_Index(command_list)
+                COMMAND_TRIGGER_INDEX[id(command_list)] = rebuilt
+                indexes_for_cache[name] = rebuilt
+    else:
+        for name, command_list in lists_by_name.items():
+            rebuilt = Build_Trigger_List_Index(command_list)
+            COMMAND_TRIGGER_INDEX[id(command_list)] = rebuilt
+            indexes_for_cache[name] = rebuilt
+        Save_Command_Trigger_Index_Cache(indexes_for_cache, signature)
+    COMMAND_TRIGGER_INDEX_SIGNATURE = signature
     return COMMAND_TRIGGER_INDEX
 
 
@@ -5269,6 +5934,123 @@ def Detect_Web_Search_Request(txt):
         query,
     )
     return bool(has_search_noun or has_search_verb)
+
+
+def Random_Choice_Normalize_For_Match(text):
+    text = str(text or "").lower()
+    text = text.replace("’", "'").replace("œ", "oe")
+    try:
+        text = unidecode(text)
+    except Exception:
+        pass
+    text = re.sub(r"[^0-9a-zà-ÿ' -]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def Random_Choice_Has_Intent(text):
+    normalized = Random_Choice_Normalize_For_Match(text)
+    if not normalized:
+        return False
+    return bool(
+        re.search(
+            r"\b("
+            r"choisis|choisi|choisit|choisissez|choisir|"
+            r"choix|aleatoire|aléatoire|au hasard|hasard|"
+            r"tranche|tranches|tranchez|"
+            r"decide|décide|decides|décides|decidez|décidez|"
+            r"selectionne|selectionnes|selectionnez|"
+            r"tire au sort|tires au sort|tirez au sort"
+            r")\b",
+            normalized,
+        )
+    )
+
+
+def Random_Choice_Clean_Option(option):
+    option = str(option or "")
+    option = option.replace("’", "'")
+    option = re.sub(
+        r"\b(s'il te plait|s'il vous plait|stp|svp|merci|s il te plait|s il vous plait)\b.*$",
+        "",
+        option,
+        flags=re.IGNORECASE,
+    )
+    option = re.sub(r"^\s*(?:ou bien|ou|et|entre|parmi)\s+", "", option, flags=re.IGNORECASE)
+    option = option.strip(" \t\r\n\"'.,;:!?")
+    return re.sub(r"\s+", " ", option).strip()
+
+
+def Random_Choice_Split_Options(payload, allow_and=False):
+    payload = str(payload or "").strip()
+    payload = re.sub(r"\s+", " ", payload)
+    payload = payload.strip(" \t\r\n\"'.,;:!?")
+    if not payload:
+        return []
+
+    parts = re.split(r"\s*(?:,|;|/|\bou bien\b|\bou\b)\s*", payload, flags=re.IGNORECASE)
+    if len(parts) < 2 and allow_and:
+        parts = re.split(r"\s+\bet\b\s+", payload, flags=re.IGNORECASE)
+
+    options = []
+    for part in parts:
+        option = Random_Choice_Clean_Option(part)
+        if option and option.lower() not in ["un choix", "une option", "option"]:
+            options.append(option)
+    return list(dict.fromkeys(options))
+
+
+def Extract_Random_Choice_Options(text):
+    text = str(text or "").strip()
+    if not text or not Random_Choice_Has_Intent(text):
+        return []
+
+    patterns = [
+        (r"\b(?:entre|parmi)\b\s+(.+)$", True),
+        (
+            r"\b(?:fais|faire|faites|donne|donnes|donnez)\s+(?:moi\s+)?(?:un\s+|une\s+)?"
+            r"choix(?:\s+(?:aleatoire|aléatoire|au hasard))?(?:\s+(?:entre|parmi))?\s+(.+)$",
+            True,
+        ),
+        (
+            r"\b(?:choisis|choisi|choisit|choisissez|choisir|selectionne|sélectionne|"
+            r"selectionnes|sélectionnes|selectionnez|sélectionnez|tranche|tranches|tranchez|"
+            r"decide|décide|decides|décides|decidez|décidez)"
+            r"(?:\s+(?:entre|parmi))?\s+(.+)$",
+            False,
+        ),
+        (r"\b(?:tire|tires|tirez)\s+(?:au\s+sort\s+)?(?:entre|parmi)?\s*(.+)$", True),
+    ]
+
+    for pattern, allow_and in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        options = Random_Choice_Split_Options(match.group(1), allow_and=allow_and)
+        if len(options) >= 2:
+            return options
+    return []
+
+
+def Detect_Random_Choice_Request(text):
+    return len(Extract_Random_Choice_Options(text)) >= 2
+
+
+def Random_Choice_Response_Text(choice):
+    return "Je choisis %s." % str(choice).strip()
+
+
+def Random_Choice_Command(text):
+    options = Extract_Random_Choice_Options(text)
+    if not options:
+        rnd = str(Non_Crypto_Randint(1, 2))
+        ouinon = SCRIPT_PATH + "/local_sounds/ouinon/" + rnd + ".wav"
+        Play_Audio_File(ouinon)
+        return True
+
+    choice = Non_Crypto_Choice(options)
+    PRINT("\n-Trinitty:Random_Choice_Command:options:%s choice:%s" % (options, choice))
+    Text_To_Speech(Random_Choice_Response_Text(choice), stayawake=True, savehistory=False)
+    return True
 
 
 def Disambiguify(ambiguities, txt):
@@ -5458,6 +6240,12 @@ def Check_Ambiguity(txt_input,allowed_functions=None, to_match=None, to_get=None
         found_prompt = ("F_prompt", SeeknReturn(trigger, Loaded_Prompt_Requests))
 
         found_rnd = ("F_rnd", SeeknReturn(trigger, Loaded_Rnd_Requests))
+        direct_random_choice = Detect_Random_Choice_Request(trigger)
+        if direct_random_choice:
+            rnd_triggers = list(found_rnd[1])
+            if "choix*aleatoire" not in rnd_triggers:
+                rnd_triggers.append("choix*aleatoire")
+            found_rnd = ("F_rnd", rnd_triggers)
 
         found_repeat = ("F_repeat", SeeknReturn(trigger, Loaded_Repeat_Requests))
 
@@ -5547,7 +6335,7 @@ def Check_Ambiguity(txt_input,allowed_functions=None, to_match=None, to_get=None
                  found_read_results,
              ]
 
-        if found_actions_triggers or found_alt_triggers or direct_search_web:
+        if found_actions_triggers or found_alt_triggers or direct_search_web or direct_random_choice:
 
             main_check = True
 
@@ -5909,6 +6697,17 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
 
     if (
         from_function != "Results_Hub"
+        and (allowed_functions is None or "F_trinity_script" in allowed_functions)
+        and Detect_Script_Introspection_Request(decoded)
+    ):
+        PRINT("\n-Trinitty:Commandes():direct script introspection command.")
+        Runtime_Debug_Event("command", text=decoded[:200], command="F_trinity_script", direct=True)
+        if CMD_DBG or from_function:
+            return "F_trinity_script"
+        return bool(Show_Script_Part(txt))
+
+    if (
+        from_function != "Results_Hub"
         and (allowed_functions is None or "F_trinity_help" in allowed_functions)
         and Detect_Trinitty_Help_Request(decoded)
     ):
@@ -5961,6 +6760,7 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
     if goto:
 
         PRINT("\n-Trinitty:Commandes():Va dans la fonction :%s" % goto)
+        Runtime_Debug_Event("command", text=decoded[:200], command=goto, from_function=from_function)
 
         #Commandes(txt, allowed_functions, "Results_Hub")
 
@@ -5993,10 +6793,7 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             return True
 
         if goto == "F_rnd":
-            rnd = str(Non_Crypto_Randint(1, 2))
-            ouinon = SCRIPT_PATH + "/local_sounds/ouinon/" + rnd + ".wav"
-            Play_Audio_File(ouinon)
-            return True
+            return Random_Choice_Command(decoded)
         if goto == "F_repeat":
             Play_Repeat_Response()
             return True
@@ -6008,7 +6805,7 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             return Trinitty_Help()
 
         if goto == "F_trinity_script":
-            Trinitty_Script()
+            Trinitty_Script(decoded)
             return True
 
         if goto == "F_read_results":
@@ -6055,7 +6852,7 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             return True
 
         return False
-    print("return false")
+    PRINT("return false")
     return False
 
 
@@ -6949,7 +7746,7 @@ def Prompt(allowed_functions=None,from_function=None):
     if from_function == "Results_Hub":
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/question/search_history_cmds.wav")
     Play_Audio_File(SCRIPT_PATH + "/local_sounds/prompt/2.wav")
-    user_input = input("\n-Trinitty:Comment puis-je vous aider ?:").strip()
+    user_input = Input_With_Timeout("\n-Trinitty:Comment puis-je vous aider ?:").strip()
     if len(str(user_input)) > 2:
 
         cmd = Commandes(user_input,allowed_functions=allowed_functions,from_function=from_function)
@@ -7491,6 +8288,14 @@ def Speech_To_Text(audio):
         words_confidence,
         Err_msg,
     )
+    Runtime_Debug_Event(
+        "stt",
+        provider=provider,
+        duration=round(time.monotonic() - started, 3),
+        transcript_confidence=transcripts_confidence,
+        words=len(words),
+        error=Err_msg,
+    )
     return (transcripts, transcripts_confidence, words, words_confidence, Err_msg)
 
 
@@ -7542,6 +8347,7 @@ def Synthesize_Text_To_Wav(text, output_path, voice="fr-FR-Neural2-A"):
 
 
 def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
+    tts_started = time.monotonic()
 
     def Resample(file):
         try:
@@ -7702,6 +8508,14 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
             Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_del_wav.wav")
 
     if len(to_sox) > 0:
+        Runtime_Debug_Event(
+            "tts",
+            streaming=False,
+            segments=len(txt_list),
+            wavs=len(to_sox),
+            duration=round(time.monotonic() - tts_started, 3),
+            cache_enabled=Config_Bool(globals().get("TTS_CACHE_ENABLED", True), default=True),
+        )
 
         if Err_Concatenation:
             return Play_Response(stay_awake=stayawake, save_history=savehistory, answer_txt=txtinput)
@@ -7717,6 +8531,14 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
     Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_audio_sox.wav")
 
     if len(txtinput) > 0:
+        Runtime_Debug_Event(
+            "tts",
+            streaming=False,
+            segments=len(txt_list),
+            wavs=0,
+            duration=round(time.monotonic() - tts_started, 3),
+            error="no_audio_but_text",
+        )
 
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_audio_but_txt_sox.wav")
         print("\n\n-Trinitty:Réponse:\n", txtinput)
@@ -7754,6 +8576,7 @@ def Concatenate_Wav_Files(wav_files, output_path):
 def Text_To_Speech_Streamed(segment_iter, stayawake=False, savehistory=True, before_first_play=None):
     PRINT("\n-Trinitty:Dans la fonction Text_To_Speech_Streamed")
 
+    tts_started = time.monotonic()
     played_any = False
     segments = []
     wav_files = []
@@ -7761,7 +8584,7 @@ def Text_To_Speech_Streamed(segment_iter, stayawake=False, savehistory=True, bef
 
     try:
         for index, raw_segment in enumerate(segment_iter):
-            segment = parse_response(str(raw_segment or "")).strip()
+            segment = parse_response(str(raw_segment or ""), translate=False).strip()
             if not segment:
                 continue
             wav_path = Runtime_Tmp_Path("stream_answer%s.wav" % str(index).zfill(4))
@@ -7792,6 +8615,15 @@ def Text_To_Speech_Streamed(segment_iter, stayawake=False, savehistory=True, bef
             Save_History(answer_txt)
         else:
             Save_History(answer_txt, no_audio=True)
+
+    Runtime_Debug_Event(
+        "tts",
+        streaming=True,
+        segments=len(segments),
+        wavs=len(wav_files),
+        duration=round(time.monotonic() - tts_started, 3),
+        concatenated=wav_ready,
+    )
 
     for wav_file in wav_files:
         try:
@@ -7905,6 +8737,8 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
     recognizer = None
     audio_stream = None
     pa = None
+    audio_lock = globals().get("AUDIO_DEVICE_LOCK")
+    audio_lock_acquired = False
     try:
         try:
             model = Get_Vosk_Model()
@@ -7916,6 +8750,9 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
             return None
 
         recognizer = Vosk_Call(vosk.KaldiRecognizer, model, 16000, grammar)
+        if audio_lock is not None:
+            audio_lock.acquire()
+            audio_lock_acquired = True
         with ignoreStderr():
             pa = pyaudio.PyAudio()
         audio_stream = pa.open(
@@ -7949,9 +8786,16 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
         return None
     finally:
         if audio_stream is not None:
-            audio_stream.close()
+            try:
+                audio_stream.close()
+            except Exception as e:
+                PRINT("\n-Trinitty:Playback_Interrupt_Local_STT_Listener:stream close error:%s" % str(e))
         if pa is not None:
-            pa.terminate()
+            try:
+                pa.terminate()
+            except Exception as e:
+                PRINT("\n-Trinitty:Playback_Interrupt_Local_STT_Listener:pa terminate error:%s" % str(e))
+        Release_Audio_Device_Lock(audio_lock, audio_lock_acquired)
 
 
 def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
@@ -8280,6 +9124,16 @@ def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=N
     keyword_index = None
     audio_stream = None
     pa = None
+    audio_lock = globals().get("AUDIO_DEVICE_LOCK")
+    audio_lock_acquired = False
+    wait_error = None
+
+    if not globals().get("PICO_KEY") or not Dependency_Available(pvporcupine):
+        return Wake_Fallback_Or_Push_To_Talk(
+            timeout=timeout,
+            allowed_functions=allowed_functions,
+            from_function=from_function,
+        )
 
     if self_launched:
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/wait/selfwait.wav")
@@ -8288,6 +9142,9 @@ def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=N
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/history/wait.wav")
 
     try:
+        if audio_lock is not None:
+            audio_lock.acquire()
+            audio_lock_acquired = True
         porcupine = pvporcupine.create(
             access_key=PICO_KEY,
             model_path=pvfr,
@@ -8321,17 +9178,37 @@ def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=N
             PRINT("\n-Trinitty:Wait timed out.")
             keyword_index = WAIT_TIMEOUT
     except Exception as e:
-        Log_Error("Wait", e)
-        PRINT("\n-Trinitty:Wait:Error:%s" % str(e))
-        return Go_Back_To_Sleep(go_trinitty=False)
+        wait_error = e
     finally:
         PRINT("\n-Trinitty:Awake.")
-        if porcupine is not None:
-            porcupine.delete()
-        if audio_stream is not None:
-            audio_stream.close()
-        if pa is not None:
-            pa.terminate()
+        try:
+            if porcupine is not None:
+                porcupine.delete()
+        except Exception as e:
+            PRINT("\n-Trinitty:Wait:porcupine delete error:%s" % str(e))
+        try:
+            if audio_stream is not None:
+                audio_stream.close()
+        except Exception as e:
+            PRINT("\n-Trinitty:Wait:stream close error:%s" % str(e))
+        try:
+            if pa is not None:
+                pa.terminate()
+        except Exception as e:
+            PRINT("\n-Trinitty:Wait:pa terminate error:%s" % str(e))
+        finally:
+            Release_Audio_Device_Lock(audio_lock, audio_lock_acquired)
+    if wait_error is not None:
+        Log_Error("Wait", wait_error)
+        PRINT("\n-Trinitty:Wait:Error:%s" % str(wait_error))
+        fallback = Local_Wake_Word_Loop(
+            timeout=timeout,
+            allowed_functions=allowed_functions,
+            from_function=from_function,
+        )
+        if fallback is not None:
+            return fallback
+        return Go_Back_To_Sleep(go_trinitty=False)
     if keyword_index is WAIT_TIMEOUT:
         return WAIT_TIMEOUT
     if keyword_index == 1:
@@ -8594,8 +9471,215 @@ def Trinitty_Script_Text(profile=None):
    return text
 
 
-def Trinitty_Script():
+def Script_Source_Path():
+   return os.path.join(globals().get("SCRIPT_PATH", Default_Script_Path()), "trinitty.py")
+
+
+def Script_Source_Signature(script_file=None):
+   script_file = script_file or Script_Source_Path()
+   try:
+      stat = os.stat(script_file)
+      return {"path": os.path.abspath(script_file), "mtime": stat.st_mtime, "size": stat.st_size}
+   except OSError:
+      return {"path": os.path.abspath(script_file), "mtime": 0, "size": 0}
+
+
+def Build_Script_Index(force=False):
+   global SCRIPT_INDEX_CACHE, SCRIPT_INDEX_SIGNATURE
+
+   script_file = Script_Source_Path()
+   signature = Script_Source_Signature(script_file)
+   if (
+      not force
+      and SCRIPT_INDEX_CACHE is not None
+      and SCRIPT_INDEX_SIGNATURE == signature
+   ):
+      return SCRIPT_INDEX_CACHE
+
+   index = {
+      "script_file": script_file,
+      "line_count": 0,
+      "functions": {},
+      "sections": {},
+   }
+   try:
+      with open(script_file, encoding="utf-8", errors="replace") as f:
+         source = f.read()
+   except OSError as e:
+      Log_Error("Build_Script_Index", e)
+      SCRIPT_INDEX_CACHE = index
+      SCRIPT_INDEX_SIGNATURE = signature
+      return index
+
+   lines = source.splitlines()
+   index["line_count"] = len(lines)
+   try:
+      tree = ast.parse(source)
+   except SyntaxError as e:
+      Log_Error("Build_Script_Index:ast", e)
+      SCRIPT_INDEX_CACHE = index
+      SCRIPT_INDEX_SIGNATURE = signature
+      return index
+
+   for node in ast.walk(tree):
+      if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+         continue
+      name = node.name
+      start = int(getattr(node, "lineno", 1))
+      end = int(getattr(node, "end_lineno", start))
+      body = "\n".join(lines[start - 1 : end])
+      normalized = Normalize_Help_Command_Text("%s %s" % (name, body[:2000]))
+      index["functions"][name] = {
+         "name": name,
+         "start": start,
+         "end": end,
+         "line_count": max(0, end - start + 1),
+         "doc": ast.get_docstring(node) or "",
+         "source": body,
+         "search": normalized,
+      }
+
+   section_keywords = {
+      "recherche web": ["google", "web", "search", "readlink", "duckduckgo", "wikipedia"],
+      "g4f": ["g4f", "gpt4free", "freegpt"],
+      "stt": ["speech_to_text", "stt", "vosk", "transcript"],
+      "tts": ["text_to_speech", "tts", "synthesize"],
+      "historique": ["history", "historique", "check_history"],
+   }
+   for section, keywords in section_keywords.items():
+      matches = []
+      for name, data in index["functions"].items():
+         haystack = "%s %s" % (name.lower(), data["search"])
+         if any(keyword in haystack for keyword in keywords):
+            matches.append(name)
+      index["sections"][section] = sorted(dict.fromkeys(matches), key=str.lower)
+
+   SCRIPT_INDEX_CACHE = index
+   SCRIPT_INDEX_SIGNATURE = signature
+   return index
+
+
+def Find_Script_Section(query):
+   index = Build_Script_Index()
+   normalized = Normalize_Help_Command_Text(query)
+   functions = index.get("functions", {})
+
+   for name, data in functions.items():
+      if name.lower() in normalized or Normalize_Help_Command_Text(name) in normalized:
+         return {"kind": "function", "name": name, "data": data}
+
+   section_aliases = {
+      "g4f": "g4f",
+      "gpt4free": "g4f",
+      "freegpt": "g4f",
+      "recherche web": "recherche web",
+      "web": "recherche web",
+      "google": "recherche web",
+      "wikipedia": "recherche web",
+      "reconnaissance vocale": "stt",
+      "speech to text": "stt",
+      "stt": "stt",
+      "synthese vocale": "tts",
+      "text to speech": "tts",
+      "tts": "tts",
+      "historique": "historique",
+   }
+   for alias, section in section_aliases.items():
+      if Normalize_Help_Command_Text(alias) in normalized:
+         return {"kind": "section", "name": section, "functions": index.get("sections", {}).get(section, [])}
+
+   query_tokens = set(normalized.split())
+   if query_tokens:
+      best = []
+      for name, data in functions.items():
+         score = len(query_tokens.intersection(set(data.get("search", "").split())))
+         if score:
+            best.append((score, name, data))
+      if best:
+         best.sort(key=lambda item: (-item[0], item[1].lower()))
+         _score, name, data = best[0]
+         return {"kind": "function", "name": name, "data": data}
+
+   return {"kind": "summary", "index": index}
+
+
+def Script_Function_Summary(data):
+   return (
+      "Fonction %s, lignes %s à %s, environ %s lignes."
+      % (
+         data.get("name", ""),
+         data.get("start", 0),
+         data.get("end", 0),
+         data.get("line_count", 0),
+      )
+   )
+
+
+def Show_Script_Part(query=None, speak=True):
+   query = str(query or "").strip()
+   match = Find_Script_Section(query)
+   kind = match.get("kind")
+
+   if kind == "function":
+      data = match["data"]
+      summary = Script_Function_Summary(data)
+      if data.get("doc"):
+         summary += " Docstring: %s" % data["doc"]
+      output = "%s\n\n%s" % (summary, data.get("source", ""))
+      print(output)
+      spoken = summary
+   elif kind == "section":
+      functions = match.get("functions", [])
+      output = "Section %s: %s fonctions.\n%s" % (
+         match.get("name"),
+         len(functions),
+         "\n".join("- %s" % name for name in functions[:80]),
+      )
+      print(output)
+      spoken = "La section %s contient %s fonctions. Les principales sont: %s." % (
+         match.get("name"),
+         len(functions),
+         ", ".join(functions[:8]) or "aucune",
+      )
+   else:
+      profile = Trinitty_Script_Profile()
+      output = Trinitty_Script_Text(profile)
+      print(output)
+      spoken = output
+
+   if speak and not globals().get("INTERPRETOR", False):
+      try:
+         Text_To_Speech(spoken, stayawake=False, savehistory=False)
+      except Exception as e:
+         PRINT("\n-Trinitty:Show_Script_Part():Text_To_Speech error:%s" % str(e))
+   return output
+
+
+def Detect_Script_Introspection_Request(text):
+   normalized = Normalize_Help_Command_Text(text)
+   if not normalized:
+      return False
+   action_words = {"affiche", "afficher", "montre", "montrer", "explique", "expliquer", "liste", "lister"}
+   tokens = set(normalized.split())
+   if not tokens.intersection(action_words):
+      return False
+
+   code_markers = {"script", "code", "source", "trinitty"}
+   if tokens.intersection(code_markers):
+      return True
+
+   section_markers = ["recherche web", "g4f", "gpt4free", "stt", "tts"]
+   if any(marker in normalized for marker in section_markers):
+      return True
+
+   index = Build_Script_Index()
+   return any(Normalize_Help_Command_Text(name) in normalized for name in index.get("functions", {}))
+
+
+def Trinitty_Script(query=None):
    script_file = SCRIPT_PATH + "/trinitty.py"
+   if query:
+      return Show_Script_Part(query)
    script_text = Trinitty_Script_Text()
    print("\n-Trinitty:Script source:%s" % script_file)
    print("\n-Trinitty:Script profile:%s" % script_text)
@@ -9298,6 +10382,10 @@ def History_Candidates(lemmatized_question, cat_file, joined_cat, category_known
     rows = Ensure_History_Index_Loaded()
     query_tokens = set(Normalize_History_Search_Text(lemmatized_question).split())
     candidates = []
+    max_candidates = max(
+        20,
+        int(Config_Positive_Float(globals().get("HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES", 120), 120)),
+    )
 
     for row in rows:
         if category_known and not (cat_file == row.get("hist_file") and joined_cat == row.get("hist_cats")):
@@ -9305,13 +10393,13 @@ def History_Candidates(lemmatized_question, cat_file, joined_cat, category_known
         token_overlap = len(query_tokens.intersection(row.get("_search_tokens", []))) if query_tokens else 0
         candidates.append((token_overlap, row))
 
-    if len(candidates) <= 200:
+    if len(candidates) <= max_candidates:
         return [row for _score, row in candidates]
 
     candidates.sort(key=lambda item: item[0], reverse=True)
     if candidates and candidates[0][0] > 0:
-        return [row for score, row in candidates[:200] if score > 0]
-    return [row for _score, row in candidates[:200]]
+        return [row for score, row in candidates[:max_candidates] if score > 0]
+    return [row for _score, row in candidates[:max_candidates]]
 
 
 def Show_History():
@@ -9722,6 +10810,7 @@ def Save_History(answer, no_audio=False):
 def Check_History(question, before_replay=None):
 
     PRINT("\n-Trinitty:Dans la fonction Check_History")
+    history_started = time.monotonic()
 
     PRINT("\n-Trinitty:question:", question)
 
@@ -9803,6 +10892,13 @@ def Check_History(question, before_replay=None):
             final_wav = w
 
     if len(final_wav) > 0:
+        Runtime_Debug_Event(
+            "history",
+            hit=True,
+            score=round(final_score, 3),
+            duration=round(time.monotonic() - history_started, 3),
+            wav=final_wav,
+        )
 
         if callable(before_replay):
             before_replay()
@@ -9831,6 +10927,12 @@ def Check_History(question, before_replay=None):
             Play_Audio_File(SCRIPT_PATH + "/local_sounds/ok/1.wav")
             return True
         return False
+    Runtime_Debug_Event(
+        "history",
+        hit=False,
+        duration=round(time.monotonic() - history_started, 3),
+        category=Joined_Cat,
+    )
     return False
 
 
@@ -9983,8 +11085,12 @@ def Load_Runtime_Keys():
     else:
         PICO_KEY = PicoLoadKeys()
         if not PICO_KEY:
-            PUSH_TO_TALK = True
-            print("\n-Trinitty:Picovoice key unavailable; switching to PUSH_TO_TALK mode.")
+            if Wake_Word_Fallback_Available():
+                PUSH_TO_TALK = False
+                print("\n-Trinitty:Picovoice key unavailable; wake word local Vosk disponible.")
+            else:
+                PUSH_TO_TALK = True
+                print("\n-Trinitty:Picovoice key unavailable; switching to PUSH_TO_TALK mode.")
 
     GOOGLE_KEY, GOOGLE_ENGINE, GOOGLE_TRANSLATE = GoogleLoadKeys()
     DLANG_KEY = DetectLanguageLoadKeys()
@@ -10012,6 +11118,7 @@ def GetConf():
     global WAIT_FOR_TIMEOUT
     global WAIT_FOR_POLL_INTERVAL
     global PLAYBACK_POLL_INTERVAL
+    global INTERPRETOR_INPUT_TIMEOUT
     global COMMAND_CLASSIFIER_ENABLED
     global COMMAND_CLASSIFIER_THRESHOLD
     global COMMAND_CLASSIFIER_MODEL_PATH
@@ -10037,6 +11144,11 @@ def GetConf():
     global READ_LINK_TIMEOUT
     global PYPI_VERSION_TIMEOUT
     global GPT4FREE_PROBE_TIMEOUT
+    global GPT4FREE_SUBPROCESS_ENABLED
+    global WAKE_WORD_LOCAL_STT_ENABLED
+    global WAKE_WORD_LOCAL_STT_WORDS
+    global WAKE_WORD_LOCAL_STT_CHUNK_SECONDS
+    global WAKE_WORD_LOCAL_STT_TIMEOUT
     global TTS_CACHE_ENABLED
     global TTS_CACHE_DIR
     global RESPONSE_STREAMING_ENABLED
@@ -10045,6 +11157,7 @@ def GetConf():
     global TTS_PARALLEL_WORKERS
     global HISTORY_INDEX_ENABLED
     global HISTORY_INDEX_PATH
+    global HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES
     global HISTORY_CLASSIFICATION_ENABLED
     global GOOGLE_SORT_BY_DATE
     global CHECK_UPDATE
@@ -10066,6 +11179,7 @@ def GetConf():
         "WAIT_FOR_TIMEOUT",
         "WAIT_FOR_POLL_INTERVAL",
         "PLAYBACK_POLL_INTERVAL",
+        "INTERPRETOR_INPUT_TIMEOUT",
         "COMMAND_CLASSIFIER_ENABLED",
         "COMMAND_CLASSIFIER_THRESHOLD",
         "COMMAND_CLASSIFIER_MODEL_PATH",
@@ -10091,6 +11205,11 @@ def GetConf():
         "READ_LINK_TIMEOUT",
         "PYPI_VERSION_TIMEOUT",
         "GPT4FREE_PROBE_TIMEOUT",
+        "GPT4FREE_SUBPROCESS_ENABLED",
+        "WAKE_WORD_LOCAL_STT_ENABLED",
+        "WAKE_WORD_LOCAL_STT_WORDS",
+        "WAKE_WORD_LOCAL_STT_CHUNK_SECONDS",
+        "WAKE_WORD_LOCAL_STT_TIMEOUT",
         "TTS_CACHE_ENABLED",
         "TTS_CACHE_DIR",
         "RESPONSE_STREAMING_ENABLED",
@@ -10099,6 +11218,7 @@ def GetConf():
         "TTS_PARALLEL_WORKERS",
         "HISTORY_INDEX_ENABLED",
         "HISTORY_INDEX_PATH",
+        "HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES",
         "HISTORY_CLASSIFICATION_ENABLED",
         "GOOGLE_SORT_BY_DATE",
         "GPT4FREE_SERVERS_LIST",
@@ -10194,6 +11314,9 @@ def GetConf():
             elif option == "PLAYBACK_POLL_INTERVAL":
                 PLAYBACK_POLL_INTERVAL = Config_Positive_Float(conf, 0.05)
 
+            elif option == "INTERPRETOR_INPUT_TIMEOUT":
+                INTERPRETOR_INPUT_TIMEOUT = Config_Nonnegative_Float(conf, 120.0)
+
             elif option == "COMMAND_CLASSIFIER_ENABLED":
                  COMMAND_CLASSIFIER_ENABLED = Config_Bool(conf, default=False)
 
@@ -10280,6 +11403,21 @@ def GetConf():
             elif option == "GPT4FREE_PROBE_TIMEOUT":
                 GPT4FREE_PROBE_TIMEOUT = Config_Positive_Float(conf, 15.0)
 
+            elif option == "GPT4FREE_SUBPROCESS_ENABLED":
+                GPT4FREE_SUBPROCESS_ENABLED = Config_Bool(conf, default=True)
+
+            elif option == "WAKE_WORD_LOCAL_STT_ENABLED":
+                WAKE_WORD_LOCAL_STT_ENABLED = Config_Bool(conf, default=True)
+
+            elif option == "WAKE_WORD_LOCAL_STT_WORDS":
+                WAKE_WORD_LOCAL_STT_WORDS = conf
+
+            elif option == "WAKE_WORD_LOCAL_STT_CHUNK_SECONDS":
+                WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = Config_Positive_Float(conf, 0.5)
+
+            elif option == "WAKE_WORD_LOCAL_STT_TIMEOUT":
+                WAKE_WORD_LOCAL_STT_TIMEOUT = Config_Nonnegative_Float(conf, 0.0)
+
             elif option == "TTS_CACHE_ENABLED":
                 TTS_CACHE_ENABLED = Config_Bool(conf, default=True)
 
@@ -10312,6 +11450,12 @@ def GetConf():
 
             elif option == "HISTORY_INDEX_PATH":
                 HISTORY_INDEX_PATH = conf
+
+            elif option == "HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES":
+                try:
+                    HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES = max(20, int(conf))
+                except Exception:
+                    HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES = 120
 
             elif option == "HISTORY_CLASSIFICATION_ENABLED":
                 HISTORY_CLASSIFICATION_ENABLED = Config_Bool(conf, default=True)
@@ -10440,6 +11584,7 @@ RESPONSE_STREAM_MAX_CHARS = 450
 TTS_PARALLEL_WORKERS = 1
 HISTORY_INDEX_ENABLED = True
 HISTORY_INDEX_PATH = cache/history_index.json
+HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES = 120
 HISTORY_CLASSIFICATION_ENABLED = True
 GOOGLE_SORT_BY_DATE = False
 GPT4FREE_SERVERS_LIST = None # Liste de providers gpt4free ou None.
@@ -10448,8 +11593,14 @@ GPT4FREE_SERVERS_AUTH = False # True, False ou All.
 GPT4FREE_COOKIES_AUTO_SYNC = True # True: copie les captures HAR/JSON avant de charger les cookies.
 GPT4FREE_COOKIES_SYNC_DIR = g4f_cookies/import
 GPT4FREE_AUTO_REJECT_NOTWORKING = True
+GPT4FREE_SUBPROCESS_ENABLED = True # True: isole gpt4free en subprocess pour éviter qu'un segfault tue Trinitty.
 INTERPRETOR = True # True: utiliser le clavier au lieu du micro.
+INTERPRETOR_INPUT_TIMEOUT = 120 # Secondes d'attente en mode clavier; 0 désactive le timeout.
 PUSH_TO_TALK = False # True: appuyer sur Entrée au lieu du wake word.
+WAKE_WORD_LOCAL_STT_ENABLED = True # True: utilise Vosk comme fallback wake word si Picovoice est absent.
+WAKE_WORD_LOCAL_STT_WORDS = trinitty,trinity,interpréteur,interpreteur,répète,repete,merci # Mots de réveil Vosk séparés par virgule.
+WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5 # Taille des blocs micro analysés par Vosk pour le réveil.
+WAKE_WORD_LOCAL_STT_TIMEOUT = 0 # Secondes d'écoute Vosk wake word; 0 attend sans limite.
 PLAYBACK_INTERRUPT_ENABLED = False # True: écoute les commandes stop/arrête pendant la lecture.
 PLAYBACK_INTERRUPT_TIMEOUT = 30 # Durée maximale d'écoute pendant une lecture.
 PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True # True: utilise Vosk local pour détecter stop/arrête pendant la lecture si un modèle est disponible.
@@ -10486,6 +11637,12 @@ XCB_ERROR_FIX = False # True: masque certains avertissements XCB liés à DISPLA
         READ_LINK_TIMEOUT = 10.0
         PYPI_VERSION_TIMEOUT = 5.0
         GPT4FREE_PROBE_TIMEOUT = 15.0
+        GPT4FREE_SUBPROCESS_ENABLED = True
+        INTERPRETOR_INPUT_TIMEOUT = 120.0
+        WAKE_WORD_LOCAL_STT_ENABLED = True
+        WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
+        WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
+        WAKE_WORD_LOCAL_STT_TIMEOUT = 0.0
         TTS_CACHE_ENABLED = True
         TTS_CACHE_DIR = "cache/tts"
         RESPONSE_STREAMING_ENABLED = True
@@ -10494,6 +11651,7 @@ XCB_ERROR_FIX = False # True: masque certains avertissements XCB liés à DISPLA
         TTS_PARALLEL_WORKERS = 1
         HISTORY_INDEX_ENABLED = True
         HISTORY_INDEX_PATH = "cache/history_index.json"
+        HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES = 120
         HISTORY_CLASSIFICATION_ENABLED = True
         GOOGLE_SORT_BY_DATE = False
         GPT4FREE_SERVERS_LIST = None
@@ -10575,7 +11733,10 @@ def Check_Update():
     Gpt4free_Is_Up = False
     Gpt4free_current_version = ""
     Gpt4free_latest_version = ""
-    if Ensure_Gpt4free_Runtime_Available():
+    if Gpt4free_Should_Use_Subprocess():
+        Gpt4free_Is_Up = True
+        PRINT("\n-Trinitty:Check_Update:gpt4free ignoré en mode quarantaine subprocess.")
+    elif Ensure_Gpt4free_Runtime_Available():
         try:
             if hasattr(g4f, "version"):
                 if hasattr(g4f.version, "utils"):
@@ -10669,12 +11830,17 @@ if __name__ == "__main__":
     PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
     PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
     PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+    WAKE_WORD_LOCAL_STT_ENABLED = True
+    WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
+    WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
+    WAKE_WORD_LOCAL_STT_TIMEOUT = 0.0
     PLAYBACK_INTERRUPT_JOIN_TIMEOUT = 2.0
     PLAYBACK_INTERRUPT_RELEASE_DELAY = 0.2
     PLAYBACK_INTERRUPT_LOCAL_STT_WARNINGS = set()
     WAIT_FOR_TIMEOUT = 30.0
     WAIT_FOR_POLL_INTERVAL = 0.05
     PLAYBACK_POLL_INTERVAL = 0.05
+    INTERPRETOR_INPUT_TIMEOUT = 120.0
     COMMAND_CLASSIFIER_ENABLED = False
     COMMAND_CLASSIFIER_THRESHOLD = 0.65
     COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"
@@ -10688,6 +11854,8 @@ if __name__ == "__main__":
     GPT4FREE_COOKIES_LOADED = False
     GPT4FREE_RUNTIME_AVAILABLE = None
     GPT4FREE_AUTO_REJECT_NOTWORKING = True
+    GPT4FREE_SUBPROCESS_ENABLED = True
+    GPT4FREE_RUNTIME_ERROR = ""
     OPENAI_ENABLED = True
     OPENAI_API_KEY = ""
     OPENAI_API_KEY_FILE = "keys/openai.key"
@@ -10718,6 +11886,7 @@ if __name__ == "__main__":
     TTS_PARALLEL_WORKERS = 1
     HISTORY_INDEX_ENABLED = True
     HISTORY_INDEX_PATH = "cache/history_index.json"
+    HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES = 120
     OPENAI_CLIENT = None
     OPENAI_CLIENT_CONFIG = None
     GOOGLE_SPEECH_CLIENT = None
@@ -10733,6 +11902,10 @@ if __name__ == "__main__":
     HISTORY_INDEX_CACHE = None
     HISTORY_INDEX_SIGNATURE = None
     COMMAND_TRIGGER_INDEX = {}
+    COMMAND_TRIGGER_INDEX_SIGNATURE = None
+    SCRIPT_INDEX_CACHE = None
+    SCRIPT_INDEX_SIGNATURE = None
+    AUDIO_DEVICE_LOCK = RLock()
     HISTORY_CLASSIFICATION_ENABLED = True
     GOOGLE_SORT_BY_DATE = False
     CHECK_UPDATE = False

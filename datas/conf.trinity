@@ -6,26 +6,26 @@ OPENAI_ENABLED = True
 OPENAI_MODEL = gpt-5.5
 OPENAI_API_KEY_FILE = keys/openai.key
 # Fichier contenant la clé OpenAI, une seule ligne, sans guillemets.
-OPENAI_TIMEOUT = 30
+OPENAI_TIMEOUT = 60
 # Délai maximum en secondes pour une requête OpenAI.
 OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
 
 SPACY_MODEL = fr_core_news_md
 # Modèle spaCy utilisé pour certaines analyses de texte.
 
-GOOGLE_STT_TIMEOUT = 20
+GOOGLE_STT_TIMEOUT = 60
 # Délai maximum en secondes pour Google Speech-to-Text.
-GOOGLE_LANGUAGE_TIMEOUT = 8
+GOOGLE_LANGUAGE_TIMEOUT = 60
 # Délai maximum en secondes pour Google Natural Language.
-WEB_SEARCH_TIMEOUT = 10
+WEB_SEARCH_TIMEOUT = 60
 # Délai maximum en secondes pour les recherches web et moteurs de fallback.
-READ_LINK_TIMEOUT = 10
+READ_LINK_TIMEOUT = 60
 # Délai maximum en secondes pour lire une page web.
-PYPI_VERSION_TIMEOUT = 5
+PYPI_VERSION_TIMEOUT = 60
 # Délai maximum en secondes pour vérifier la version publiée sur PyPI.
 GPT4FREE_PROBE_TIMEOUT = 15
 # Délai maximum en secondes pour tester l'import de gpt4free dans un sous-processus.
-WAIT_FOR_TIMEOUT = 30
+WAIT_FOR_TIMEOUT = 250
 # Délai maximum en secondes pour attendre une opération audio/question.
 WAIT_FOR_POLL_INTERVAL = 0.05
 # Intervalle de vérification des files internes pendant une attente.
@@ -40,7 +40,7 @@ STT_AVG_WORD_CONFIDENCE_MIN = 0.65
 # Confiance moyenne minimale sur les mots.
 STT_BAD_WORD_RATIO_MAX = 0.25
 # Part maximale de mots incertains acceptée si la phrase globale est fiable.
-STT_BAD_WORD_COUNT_MAX = 2
+STT_BAD_WORD_COUNT_MAX = 3
 # Nombre maximal de mots incertains accepté si la phrase globale est fiable.
 STT_DEBUG = False
 # True: sauvegarde audio brut, transcript, confiances, durée et erreurs STT dans STT_DEBUG_DIR.
@@ -68,6 +68,8 @@ HISTORY_INDEX_ENABLED = True
 # True: indexe l'historique pour éviter un scan complet coûteux à chaque question.
 HISTORY_INDEX_PATH = cache/history_index.json
 # Emplacement de l'index historique relatif au dossier utilisateur Trinitty.
+HISTORY_SEQUENCE_MATCH_MAX_CANDIDATES = 120
+# Nombre maximal de candidats d'historique comparés finement par SequenceMatcher.
 
 HISTORY_CLASSIFICATION_ENABLED = True
 # True: classe l'historique en arrière-plan.
@@ -87,12 +89,24 @@ GPT4FREE_COOKIES_SYNC_DIR = g4f_cookies/import
 # Dossier source des captures cookies. Relatif au dossier utilisateur si le chemin commence par g4f_cookies.
 GPT4FREE_AUTO_REJECT_NOTWORKING = True
 # True: ignore les fournisseurs gpt4free marqués working=False.
+GPT4FREE_SUBPROCESS_ENABLED = True
+# True: isole les appels gpt4free dans un sous-processus pour protéger Trinitty des segfaults.
 
 INTERPRETOR = False
 # True: utiliser le clavier au lieu du micro.
+INTERPRETOR_INPUT_TIMEOUT = 120
+# Secondes d'attente en mode clavier avant retour en veille. 0 désactive le timeout.
 PUSH_TO_TALK = False
 # True: appuyer sur Entrée au lieu d'utiliser le wake word.
-PLAYBACK_INTERRUPT_ENABLED = False
+WAKE_WORD_LOCAL_STT_ENABLED = True
+# True: utilise Vosk comme fallback wake word si Picovoice/Porcupine est absent ou en erreur.
+WAKE_WORD_LOCAL_STT_WORDS = trinitty,trinity,interpréteur,interpreteur,répète,repete,merci
+# Mots de réveil Vosk séparés par virgule.
+WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
+# Taille des blocs micro analysés par Vosk pour le réveil.
+WAKE_WORD_LOCAL_STT_TIMEOUT = 0
+# Secondes d'écoute Vosk wake word. 0 attend sans limite.
+PLAYBACK_INTERRUPT_ENABLED = True
 # True: écouter les commandes stop/arrête pendant la lecture d'une réponse.
 PLAYBACK_INTERRUPT_TIMEOUT = 30
 # Durée maximale en secondes pour écouter une interruption pendant une lecture.

@@ -81,8 +81,23 @@ F_prompt,interpreteur
 F_trinity_script,affiche ton code source
 F_trinity_script,affichez votre code source
 F_trinity_script,script trinitty
+F_trinity_script,affiche*fonction
+F_trinity_script,explique*fonction
+F_trinity_script,montre*partie
+F_trinity_script,liste*fonctions*liees
+F_trinity_script,liste*fonctions*liées
 F_rnd,choix aleatoire
 F_rnd,entre oui et non
+F_rnd,choisis*entre
+F_rnd,choisi*entre
+F_rnd,choisissez*entre
+F_rnd,choisis*ou
+F_rnd,choisi*ou
+F_rnd,choisissez*ou
+F_rnd,choix*aleatoire*entre
+F_rnd,choix*au hasard*entre
+F_rnd,tranche*entre
+F_rnd,tire*sort*entre
 F_repeat,tu peux*repete
 F_repeat,vous*pouvez*repeter
 F_repeat,moyen*tu repete
