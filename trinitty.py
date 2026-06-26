@@ -220,6 +220,7 @@ Usage terminal:
 Commandes vocales utiles:
   "affiche ton aide"                         Affiche cette aide et joue l'aide audio.
   "informations de mise à jour de Trinitty"   Affiche la note de mise à jour.
+  "quoi de neuf avec cette mise à jour"        Affiche la note de mise à jour.
   "fais une recherche internet sur ..."      Recherche sur le web.
   "fais une recherche wikipedia sur ..."     Recherche sur Wikipedia.
   "affiche l'historique"                     Affiche les échanges enregistrés.
@@ -331,7 +332,11 @@ def Ensure_Command_Registry_Loaded():
 def Command_Function_Metadata():
     return [
         ("F_trinity_help", "Afficher l'aide generale", ["affiche ton aide"]),
-        ("F_trinitty_update", "Afficher les informations de mise a jour", ["informations de mise a jour de Trinitty"]),
+        (
+            "F_trinitty_update",
+            "Afficher les informations de mise a jour",
+            ["informations de mise a jour de Trinitty", "quoi de neuf avec cette mise a jour"],
+        ),
         ("F_trinity_script", "Interroger le script Trinitty", ["affiche la fonction Check_History"]),
         ("F_prompt", "Passer en saisie clavier", ["invite de commande"]),
         ("F_search_web", "Faire une recherche web", ["fais une recherche internet sur albert einstein"]),
@@ -919,6 +924,8 @@ def Append_Missing_User_Config_Options(user_conf):
         user_text = cleaned_user_text
 
     existing_keys = set(Config_Keys_From_Text(user_text))
+    if "REMEMBER_LAST_15M" in existing_keys:
+        existing_keys.add("LAST_DIALOG_CONTEXT_ENABLED")
     missing_lines = []
     packaged_lines = packaged_text.splitlines()
     for index, line in enumerate(packaged_lines):
@@ -1963,7 +1970,6 @@ STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
 STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
 STT_BAD_WORD_RATIO_MAX = 0.25
-STT_BAD_WORD_COUNT_MAX = 2
 STT_DEBUG = False
 STT_DEBUG_DIR = "logs/stt"
 STT_LOCAL_FALLBACK_ENABLED = False
@@ -1995,6 +2001,9 @@ GPT4FREE_COOKIES_LOADED = False
 GPT4FREE_RUNTIME_AVAILABLE = None
 OPENAI_CLIENT = None
 OPENAI_CLIENT_CONFIG = None
+LAST_DIALOG_CONTEXT_ENABLED = False
+LAST_DIALOG_CONTEXT_TTL_SECONDS = 1500
+REMEMBER_LAST_15M = False
 GOOGLE_SPEECH_CLIENT = None
 GOOGLE_TTS_CLIENT = None
 GOOGLE_LANGUAGE_CLIENT = None
@@ -2510,11 +2519,25 @@ def Openai_Request(input):
     ).strip()
     request = {
         "model": model,
-        "input": str(input),
+        "input": Llm_Input_With_Last_Dialog_Context(input),
     }
     if instructions and instructions.lower() not in ["none", "false"]:
         request["instructions"] = instructions
     return request
+
+
+def Last_Dialog_Context_Enabled():
+    if "LAST_DIALOG_CONTEXT_ENABLED" in globals():
+        return Config_Bool(globals().get("LAST_DIALOG_CONTEXT_ENABLED"), default=False)
+    return Config_Bool(globals().get("REMEMBER_LAST_15M", False), default=False)
+
+
+def Last_Dialog_Context_Ttl_Seconds():
+    return Config_Nonnegative_Float(globals().get("LAST_DIALOG_CONTEXT_TTL_SECONDS", 1500), 1500)
+
+
+def Llm_Input_With_Last_Dialog_Context(input):
+    return Check_Time_Dialogue(datetime.now(), str(input))
 
 
 def Openai_Gpt(input):
@@ -3650,7 +3673,7 @@ def FreeGpt(input, check_history=True, save_last_sentence=True, play_wait=True, 
             continue
 
         PRINT("\n-Trinitty:Asking :", provider_ref)
-        request_input = str(input)
+        request_input = Llm_Input_With_Last_Dialog_Context(input)
         if provider_ref in ["g4f.Provider.PerplexityLabs","g4f.Provider.ChatgptFree"]: ##tmpfix
              PRINT("\n-Trinitty:Adding '. Réponds en français.':")
              request_input = request_input + " . Réponds en français."
@@ -6769,7 +6792,12 @@ def Detect_Trinitty_Update_Request(text):
     trinitty_markers = {"trinitty", "trinity", "assistant", "programme"}
     tokens = set(normalized.split())
     if not tokens.intersection(trinitty_markers):
-        return False
+        markerless_update_patterns = [
+            r"^quoi de neuf (avec |sur |pour |dans )?(cette |la |ta |ton )?mise [aà] jour$",
+            r"^(cette |la |ta |ton )?mise [aà] jour.*quoi de neuf$",
+        ]
+        if not any(re.search(pattern, normalized) for pattern in markerless_update_patterns):
+            return False
 
     update_patterns = [
         r"\bmise [aà] jour\b",
@@ -6777,6 +6805,7 @@ def Detect_Trinitty_Update_Request(text):
         r"\bmaj\b",
         r"\bderni[eè]re version\b",
         r"\bversion r[eé]cente\b",
+        r"\bquoi de neuf\b",
         r"\bquoi de nouveau\b",
         r"\bnouveaute\b",
         r"\bnouveaut[eé]\b",
@@ -8106,10 +8135,11 @@ def Check_Transcript(transcripts, transcripts_confidence, words, words_confidenc
         if bad_word:
             word_count = max(len(words_confidence), 1)
             bad_word_ratio = len(bad_word) / word_count
+            bad_word_limit = Stt_Bad_Word_Limit(word_count)
             bad_word_is_tolerable = (
                 final_confidence
                 and avg_conf >= STT_AVG_WORD_CONFIDENCE_MIN
-                and len(bad_word) <= STT_BAD_WORD_COUNT_MAX
+                and len(bad_word) <= bad_word_limit
                 and bad_word_ratio <= STT_BAD_WORD_RATIO_MAX
             )
             if bad_word_is_tolerable:
@@ -8126,6 +8156,12 @@ def Check_Transcript(transcripts, transcripts_confidence, words, words_confidenc
     Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_respons.wav")
     #      Go_Back_To_Sleep()
     return ("", False)
+
+
+def Stt_Bad_Word_Limit(word_count):
+    word_count = max(1, int(word_count or 0))
+    ratio = Config_Nonnegative_Float(globals().get("STT_BAD_WORD_RATIO_MAX", 0.25), 0.25)
+    return max(1, int(word_count * ratio))
 
 
 def Normalize_Opinion_Text(txt):
@@ -10891,23 +10927,27 @@ def Search_History(to_search):
 def Check_Time_Dialogue(time_to_substract=None,string=None):
     global LAST_DIALOG
 
-    if not REMEMBER_LAST_15M:
+    if not Last_Dialog_Context_Enabled():
         return string
 
-    if len(LAST_DIALOG) == 0:
+    if not isinstance(LAST_DIALOG, tuple) or len(LAST_DIALOG) < 2:
         return string
 
     try:
+        if time_to_substract is None:
+            time_to_substract = datetime.now()
         last_string = LAST_DIALOG[0]
         last_stamp = LAST_DIALOG[1]
+        if not isinstance(last_string, str) or not isinstance(last_stamp, datetime):
+            return string
 
         time_difference = (time_to_substract - last_stamp).total_seconds()
-        if time_difference > 1500:
+        if time_difference > Last_Dialog_Context_Ttl_Seconds():
             LAST_DIALOG = ()
             return string
-        return """La phrase commencant par "last_input=" représente la derniére phrase qu'un utilisateur t'a posé et tu y as dèja répondu même si tu ne t'en souviens pas.
-La phrase commencant par "new_input=" représente une nouvelle interaction du même utilisateur avec toi tu devras répondre à ce que contient "new_input=".
-La phrase commencant par "last_input=" peut n'avoir aucun rapport avec "new_input=" tu es donc libre de l'ignorer ou non en fonction de sa pertinence avec "new_input=".
+        return """La phrase commencant par "last_input=" représente la dernière phrase qu'un utilisateur t'a posée et tu y as déjà répondu même si tu ne t'en souviens pas.
+La phrase commencant par "new_input=" représente une nouvelle interaction du même utilisateur avec toi; tu devras répondre à ce que contient "new_input=".
+La phrase commencant par "last_input=" peut n'avoir aucun rapport avec "new_input=". Tu dois évaluer la corrélation entre les deux phrases et ignorer "last_input=" si ce n'est pas pertinent.
 Ne fais aucune mention dans ta réponse de cette consigne.
 last_input='%s'
 new_input='%s'"""%(last_string,string)
@@ -11412,12 +11452,14 @@ def GetConf():
     global OPENAI_MODEL
     global OPENAI_TIMEOUT
     global OPENAI_INSTRUCTIONS
+    global LAST_DIALOG_CONTEXT_ENABLED
+    global LAST_DIALOG_CONTEXT_TTL_SECONDS
+    global REMEMBER_LAST_15M
     global SPACY_MODEL
     global STT_TRANSCRIPT_CONFIDENCE_MIN
     global STT_WORD_CONFIDENCE_MIN
     global STT_AVG_WORD_CONFIDENCE_MIN
     global STT_BAD_WORD_RATIO_MAX
-    global STT_BAD_WORD_COUNT_MAX
     global STT_DEBUG
     global STT_DEBUG_DIR
     global STT_LOCAL_FALLBACK_ENABLED
@@ -11477,6 +11519,9 @@ def GetConf():
         "OPENAI_MODEL",
         "OPENAI_TIMEOUT",
         "OPENAI_INSTRUCTIONS",
+        "LAST_DIALOG_CONTEXT_ENABLED",
+        "LAST_DIALOG_CONTEXT_TTL_SECONDS",
+        "REMEMBER_LAST_15M",
         "SPACY_MODEL",
         "STT_TRANSCRIPT_CONFIDENCE_MIN",
         "STT_WORD_CONFIDENCE_MIN",
@@ -11647,6 +11692,17 @@ def GetConf():
             elif option == "OPENAI_INSTRUCTIONS":
                 OPENAI_INSTRUCTIONS = conf
 
+            elif option == "LAST_DIALOG_CONTEXT_ENABLED":
+                LAST_DIALOG_CONTEXT_ENABLED = Config_Bool(conf, default=False)
+                REMEMBER_LAST_15M = LAST_DIALOG_CONTEXT_ENABLED
+
+            elif option == "REMEMBER_LAST_15M":
+                LAST_DIALOG_CONTEXT_ENABLED = Config_Bool(conf, default=True)
+                REMEMBER_LAST_15M = LAST_DIALOG_CONTEXT_ENABLED
+
+            elif option == "LAST_DIALOG_CONTEXT_TTL_SECONDS":
+                LAST_DIALOG_CONTEXT_TTL_SECONDS = Config_Nonnegative_Float(conf, 1500)
+
             elif option == "SPACY_MODEL":
                 if conf:
                     SPACY_MODEL = conf
@@ -11664,10 +11720,7 @@ def GetConf():
                 STT_BAD_WORD_RATIO_MAX = Config_Positive_Float(conf, 0.25)
 
             elif option == "STT_BAD_WORD_COUNT_MAX":
-                try:
-                    STT_BAD_WORD_COUNT_MAX = max(0, int(conf))
-                except Exception:
-                    STT_BAD_WORD_COUNT_MAX = 2
+                PRINT("\n-Trinitty:STT_BAD_WORD_COUNT_MAX ignoré; utilisez STT_BAD_WORD_RATIO_MAX.")
 
             elif option == "STT_DEBUG":
                 STT_DEBUG = Config_Bool(conf, default=False)
@@ -11859,6 +11912,8 @@ OPENAI_MODEL = gpt-5.5
 OPENAI_API_KEY_FILE = keys/openai.key
 OPENAI_TIMEOUT = 30
 OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
+LAST_DIALOG_CONTEXT_ENABLED = False
+LAST_DIALOG_CONTEXT_TTL_SECONDS = 1500
 SPACY_MODEL = fr_core_news_md
 GOOGLE_STT_TIMEOUT = 20
 GOOGLE_LANGUAGE_TIMEOUT = 8
@@ -11866,7 +11921,6 @@ STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
 STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
 STT_BAD_WORD_RATIO_MAX = 0.25
-STT_BAD_WORD_COUNT_MAX = 2
 STT_DEBUG = False
 STT_DEBUG_DIR = logs/stt
 STT_LOCAL_FALLBACK_ENABLED = False
@@ -12130,6 +12184,8 @@ if __name__ == "__main__":
     Providers_To_Use = []
     Runtime_Errors = []
     LAST_DIALOG = ()
+    LAST_DIALOG_CONTEXT_ENABLED = False
+    LAST_DIALOG_CONTEXT_TTL_SECONDS = 1500
     REMEMBER_LAST_15M = False
     INTERPRETOR = False
     PUSH_TO_TALK = False
@@ -12177,7 +12233,6 @@ if __name__ == "__main__":
     STT_WORD_CONFIDENCE_MIN = 0.6
     STT_AVG_WORD_CONFIDENCE_MIN = 0.65
     STT_BAD_WORD_RATIO_MAX = 0.25
-    STT_BAD_WORD_COUNT_MAX = 2
     STT_DEBUG = False
     STT_DEBUG_DIR = "logs/stt"
     STT_LOCAL_FALLBACK_ENABLED = False

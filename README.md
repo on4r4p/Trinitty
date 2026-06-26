@@ -167,6 +167,8 @@ SAVED_ANSWER = default
 OPENAI_API_KEY_FILE = keys/openai.key
 OPENAI_MODEL = gpt-5.5
 OPENAI_TIMEOUT = 30
+LAST_DIALOG_CONTEXT_ENABLED = False
+LAST_DIALOG_CONTEXT_TTL_SECONDS = 1500
 GOOGLE_STT_TIMEOUT = 20
 GOOGLE_LANGUAGE_TIMEOUT = 8
 WEB_SEARCH_TIMEOUT = 10
@@ -175,11 +177,10 @@ STT_TRANSCRIPT_CONFIDENCE_MIN = 0.7
 STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
 STT_BAD_WORD_RATIO_MAX = 0.25
-STT_BAD_WORD_COUNT_MAX = 2
 STT_DEBUG = False
 STT_LOCAL_FALLBACK_ENABLED = False
 TTS_CACHE_ENABLED = True
-RESPONSE_STREAMING_ENABLED = True
+RESPONSE_STREAMING_ENABLED = False
 RESPONSE_STREAM_MIN_CHARS = 120
 RESPONSE_STREAM_MAX_CHARS = 450
 HISTORY_INDEX_ENABLED = True
@@ -189,7 +190,11 @@ PLAYBACK_INTERRUPT_ENABLED = False
 GPT4FREE_SERVERS_STATUS = Active
 ```
 
-`RESPONSE_STREAMING_ENABLED = True` permet de commencer la synthèse vocale par segments dès qu'OpenAI fournit assez de texte, au lieu d'attendre toute la réponse. Si le streaming échoue avant le premier segment, Trinitty revient au mode OpenAI classique.
+`LAST_DIALOG_CONTEXT_ENABLED = True` ajoute à la requête LLM la dernière question récente avec la nouvelle demande. Le modèle doit évaluer la corrélation et ignorer l'ancien contexte s'il n'est pas pertinent. La valeur par défaut est `False` pour éviter qu'un ancien échange influence une nouvelle question sans activation explicite. `LAST_DIALOG_CONTEXT_TTL_SECONDS` règle la durée de validité de ce contexte.
+
+`RESPONSE_STREAMING_ENABLED = True` permet de commencer la synthèse vocale par segments dès qu'OpenAI fournit assez de texte, au lieu d'attendre toute la réponse. La valeur par défaut est `False`, car la réponse concaténée reste plus stable sur Raspberry.
+
+`STT_BAD_WORD_RATIO_MAX` pilote la tolérance aux mots incertains en proportion de la longueur de phrase. `STT_BAD_WORD_COUNT_MAX` n'est plus utilisé.
 
 `HISTORY_INDEX_ENABLED = True` crée un index dans `~/.local/share/Trinitty/cache/history_index.json` pour accélérer `Check_History`, l'affichage et la recherche dans l'historique. L'index est reconstruit uniquement quand les fichiers d'historique changent.
 

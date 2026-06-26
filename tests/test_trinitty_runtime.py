@@ -50,7 +50,6 @@ def reset_command_state():
     trinitty.STT_WORD_CONFIDENCE_MIN = 0.6
     trinitty.STT_AVG_WORD_CONFIDENCE_MIN = 0.65
     trinitty.STT_BAD_WORD_RATIO_MAX = 0.25
-    trinitty.STT_BAD_WORD_COUNT_MAX = 2
     trinitty.STT_DEBUG = False
     trinitty.STT_DEBUG_DIR = "logs/stt"
     trinitty.STT_LOCAL_FALLBACK_ENABLED = False
@@ -97,6 +96,9 @@ def reset_command_state():
     trinitty.OPENAI_MODEL = "gpt-5.5"
     trinitty.OPENAI_TIMEOUT = 30.0
     trinitty.OPENAI_INSTRUCTIONS = "Reponds en francais de facon concise et naturelle."
+    trinitty.LAST_DIALOG_CONTEXT_ENABLED = False
+    trinitty.LAST_DIALOG_CONTEXT_TTL_SECONDS = 1500
+    trinitty.REMEMBER_LAST_15M = False
     trinitty.GPT4FREE_COOKIES_AUTO_SYNC = True
     trinitty.GPT4FREE_COOKIES_SYNC_DIR = "g4f_cookies/import"
     trinitty.GPT4FREE_COOKIES_LOADED = False
@@ -246,11 +248,12 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     "READ_LINK_TIMEOUT",
                     "READ_LINK_MIN_CHARS",
                     "READ_LINK_MAX_CHARS",
+                    "LAST_DIALOG_CONTEXT_ENABLED",
+                    "LAST_DIALOG_CONTEXT_TTL_SECONDS",
                     "STT_TRANSCRIPT_CONFIDENCE_MIN",
                     "STT_WORD_CONFIDENCE_MIN",
                     "STT_AVG_WORD_CONFIDENCE_MIN",
                     "STT_BAD_WORD_RATIO_MAX",
-                    "STT_BAD_WORD_COUNT_MAX",
                     "STT_DEBUG",
                     "STT_LOCAL_FALLBACK_ENABLED",
                     "TTS_CACHE_ENABLED",
@@ -382,6 +385,30 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn("# True: utilise Vosk local pendant la lecture.", migrated)
         self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête", migrated)
         self.assertIn("# Mots/phrases d'arrêt séparés par virgule.", migrated)
+
+    def test_append_missing_user_config_options_preserves_legacy_last_dialog_context_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            user_conf = Path(tmp) / "conf.trinity"
+            user_conf.write_text("REMEMBER_LAST_15M = True\n")
+            original_packaged_config_text = trinitty.Packaged_Config_Text
+            trinitty.Packaged_Config_Text = lambda: "\n".join(
+                [
+                    "LAST_DIALOG_CONTEXT_ENABLED = False",
+                    "# True: ajoute le contexte récent.",
+                    "LAST_DIALOG_CONTEXT_TTL_SECONDS = 1500",
+                    "# Durée du contexte récent.",
+                ]
+            )
+            try:
+                self.assertTrue(trinitty.Append_Missing_User_Config_Options(str(user_conf)))
+            finally:
+                trinitty.Packaged_Config_Text = original_packaged_config_text
+
+            migrated = user_conf.read_text()
+
+        self.assertIn("REMEMBER_LAST_15M = True", migrated)
+        self.assertNotIn("LAST_DIALOG_CONTEXT_ENABLED = False", migrated)
+        self.assertIn("LAST_DIALOG_CONTEXT_TTL_SECONDS = 1500", migrated)
 
     def test_append_missing_user_config_options_removes_orphan_auto_comment_block(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -999,6 +1026,13 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertEqual(
             "F_trinitty_update",
             trinitty.Commandes("donne des informations concernant la dernière mise à jour de Trinitty"),
+        )
+        self.assertEqual(
+            "F_trinitty_update",
+            trinitty.Commandes("quoi de neuf avec cette mise à jour"),
+        )
+        self.assertIsNone(
+            trinitty.Commandes("quoi de neuf dans la mise à jour minecraft"),
         )
 
     def test_doctor_fix_argument_runs_dependency_installer(self):
@@ -4290,6 +4324,48 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn(("classify-worker", "question actuelle"), calls)
         self.assertIn(("openai", "question actuelle"), calls)
 
+    def test_openai_request_adds_recent_last_dialog_context_when_enabled(self):
+        reset_command_state()
+        trinitty.LAST_DIALOG_CONTEXT_ENABLED = True
+        trinitty.LAST_DIALOG = ("ancienne question", trinitty.datetime.now())
+
+        request = trinitty.Openai_Request("nouvelle question")
+
+        self.assertIn("last_input='ancienne question'", request["input"])
+        self.assertIn("new_input='nouvelle question'", request["input"])
+        self.assertIn("corrélation", request["input"])
+
+    def test_openai_request_can_disable_last_dialog_context(self):
+        reset_command_state()
+        trinitty.LAST_DIALOG_CONTEXT_ENABLED = False
+        trinitty.LAST_DIALOG = ("ancienne question", trinitty.datetime.now())
+
+        request = trinitty.Openai_Request("nouvelle question")
+
+        self.assertEqual("nouvelle question", request["input"])
+
+    def test_openai_request_expires_old_last_dialog_context(self):
+        reset_command_state()
+        trinitty.LAST_DIALOG_CONTEXT_ENABLED = True
+        trinitty.LAST_DIALOG_CONTEXT_TTL_SECONDS = 1
+        trinitty.LAST_DIALOG = ("ancienne question", trinitty.datetime.fromtimestamp(time.time() - 30))
+
+        request = trinitty.Openai_Request("nouvelle question")
+
+        self.assertEqual("nouvelle question", request["input"])
+        self.assertEqual((), trinitty.LAST_DIALOG)
+
+    def test_openai_request_ignores_non_dialog_last_dialog_payload(self):
+        reset_command_state()
+        trinitty.LAST_DIALOG_CONTEXT_ENABLED = True
+        payload = [{"google_title": "Titre"}]
+        trinitty.LAST_DIALOG = payload
+
+        request = trinitty.Openai_Request("nouvelle question")
+
+        self.assertEqual("nouvelle question", request["input"])
+        self.assertIs(payload, trinitty.LAST_DIALOG)
+
     def test_play_wait_response_audio_uses_packaged_wait_sound(self):
         reset_command_state()
         trinitty.SCRIPT_PATH = str(ROOT)
@@ -4482,6 +4558,42 @@ class TrinittyRuntimeTests(unittest.TestCase):
             0.92,
             ["phrase", "trop", "incertaine", "pour", "etre", "acceptee"],
             [0.98, 0.21, 0.22, 0.24, 0.95, 0.96],
+            "",
+        )
+
+        self.assertFalse(final_confidence)
+
+    def test_check_transcript_uses_dynamic_bad_word_limit_for_long_phrase(self):
+        reset_command_state()
+        words = ["mot%02d" % index for index in range(20)]
+        confidences = [0.95] * len(words)
+        for index in [2, 6, 10, 14]:
+            confidences[index] = 0.22
+
+        text, final_confidence = trinitty.Check_Transcript(
+            " ".join(words),
+            0.92,
+            words,
+            confidences,
+            "",
+        )
+
+        self.assertEqual(" ".join(words), text)
+        self.assertTrue(final_confidence)
+        self.assertEqual(5, trinitty.Stt_Bad_Word_Limit(len(words)))
+
+    def test_check_transcript_rejects_when_bad_word_ratio_is_too_high(self):
+        reset_command_state()
+        words = ["mot%02d" % index for index in range(20)]
+        confidences = [0.95] * len(words)
+        for index in [1, 4, 7, 10, 13, 16]:
+            confidences[index] = 0.22
+
+        _text, final_confidence = trinitty.Check_Transcript(
+            " ".join(words),
+            0.92,
+            words,
+            confidences,
             "",
         )
 

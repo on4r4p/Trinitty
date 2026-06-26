@@ -1,20 +1,20 @@
-Version: 0.1.36
-Titre: Stabilité runtime, commandes et fallbacks audio
+Version: 0.1.37
+Titre: Reconnaissance vocale plus souple et contexte de dialogue récent
 Date: 2026-06-26
 
 Résumé:
-Cette mise à jour améliore surtout la stabilité de Trinitty au lancement et pendant l'utilisation vocale. Picovoice devient optionnel: si la clé Pico ou Porcupine manque, Trinitty peut utiliser le fallback Vosk ou le mode push-to-talk selon la configuration. Les accès gpt4free sont mieux isolés pour éviter qu'un crash de g4f arrête tout le programme.
+Cette mise à jour rend la validation Speech-to-Text plus juste sur les phrases longues. Trinitty n'utilise plus un nombre fixe de mots incertains: la limite est calculée selon la longueur de la phrase avec STT_BAD_WORD_RATIO_MAX.
+
+Trinitty réactive aussi proprement le contexte de dialogue récent. Quand LAST_DIALOG_CONTEXT_ENABLED est activé, la dernière question sauvegardée est envoyée au LLM avec la nouvelle demande. Le modèle doit vérifier si les deux phrases sont liées et ignorer l'ancien contexte si ce n'est pas pertinent.
 
 Changements principaux:
-- ajout d'un verrou audio global pour éviter que plusieurs threads ouvrent le micro en même temps;
-- fallback wake word Vosk quand Picovoice n'est pas disponible;
-- quarantaine gpt4free par subprocess pour limiter les segfaults;
-- meilleure introspection du script sans confondre avec les commandes normales;
-- timeout de saisie clavier pour l'interpréteur;
-- diagnostics doctor plus utiles pour micro, haut-parleur, Vosk, Google STT et OpenAI.
+- remplacement de STT_BAD_WORD_COUNT_MAX par un calcul proportionnel basé sur STT_BAD_WORD_RATIO_MAX;
+- ajout de LAST_DIALOG_CONTEXT_ENABLED pour activer ou désactiver le contexte de la dernière question;
+- ajout de LAST_DIALOG_CONTEXT_TTL_SECONDS pour limiter la durée de ce contexte;
+- application du même contexte aux requêtes OpenAI normales, au streaming OpenAI et au fallback gpt4free;
+- configuration et README mis à jour pour expliquer les nouveaux réglages.
 
 Commandes utiles:
 - trinitty --update-info
 - dites: "informations de mise à jour de Trinitty"
-- trinitty doctor
-- trinitty --check-install
+- dites: "quoi de neuf avec cette mise à jour"

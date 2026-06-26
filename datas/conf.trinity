@@ -9,6 +9,10 @@ OPENAI_API_KEY_FILE = keys/openai.key
 OPENAI_TIMEOUT = 60
 # Délai maximum en secondes pour une requête OpenAI.
 OPENAI_INSTRUCTIONS = Reponds en francais de facon concise et naturelle.
+LAST_DIALOG_CONTEXT_ENABLED = False
+# True: ajoute à la requête LLM la dernière question récente afin d'aider les suivis de conversation.
+LAST_DIALOG_CONTEXT_TTL_SECONDS = 1500
+# Durée maximale en secondes pendant laquelle la dernière question peut servir de contexte.
 
 SPACY_MODEL = fr_core_news_md
 # Modèle spaCy utilisé pour certaines analyses de texte.
@@ -43,9 +47,7 @@ STT_WORD_CONFIDENCE_MIN = 0.6
 STT_AVG_WORD_CONFIDENCE_MIN = 0.65
 # Confiance moyenne minimale sur les mots.
 STT_BAD_WORD_RATIO_MAX = 0.25
-# Part maximale de mots incertains acceptée si la phrase globale est fiable.
-STT_BAD_WORD_COUNT_MAX = 3
-# Nombre maximal de mots incertains accepté si la phrase globale est fiable.
+# Part maximale de mots incertains acceptée si la phrase globale est fiable. La limite est calculée selon la longueur de la phrase.
 STT_DEBUG = False
 # True: sauvegarde audio brut, transcript, confiances, durée et erreurs STT dans STT_DEBUG_DIR.
 STT_DEBUG_DIR = logs/stt
