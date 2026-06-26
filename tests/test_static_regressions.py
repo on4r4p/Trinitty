@@ -109,6 +109,12 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
 
         self.assertEqual([], sorted(local_wavs - covered))
 
+    def test_pyproject_packages_update_info_note(self):
+        pyproject = (ROOT / "pyproject.toml").read_text()
+
+        self.assertTrue((ROOT / "datas" / "update_info.trinity").exists())
+        self.assertIn('"datas/update_info.trinity"', pyproject)
+
     def test_project_uses_trinitty_entrypoint_name(self):
         gitignore = (ROOT / ".gitignore").read_text()
         project_files = [

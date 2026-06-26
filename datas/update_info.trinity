@@ -1,0 +1,20 @@
+Version: 0.1.35
+Titre: Stabilité runtime, commandes et fallbacks audio
+Date: 2026-06-26
+
+Résumé:
+Cette mise à jour améliore surtout la stabilité de Trinitty au lancement et pendant l'utilisation vocale. Picovoice devient optionnel: si la clé Pico ou Porcupine manque, Trinitty peut utiliser le fallback Vosk ou le mode push-to-talk selon la configuration. Les accès gpt4free sont mieux isolés pour éviter qu'un crash de g4f arrête tout le programme.
+
+Changements principaux:
+- ajout d'un verrou audio global pour éviter que plusieurs threads ouvrent le micro en même temps;
+- fallback wake word Vosk quand Picovoice n'est pas disponible;
+- quarantaine gpt4free par subprocess pour limiter les segfaults;
+- meilleure introspection du script sans confondre avec les commandes normales;
+- timeout de saisie clavier pour l'interpréteur;
+- diagnostics doctor plus utiles pour micro, haut-parleur, Vosk, Google STT et OpenAI.
+
+Commandes utiles:
+- trinitty --update-info
+- dites: "informations de mise à jour de Trinitty"
+- trinitty doctor
+- trinitty --check-install

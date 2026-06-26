@@ -111,6 +111,7 @@ def reset_command_state():
     trinitty.Loaded_Trinitty_Dev_Requests = []
     trinitty.Loaded_Trinitty_Script_Requests = []
     trinitty.Loaded_Trinitty_Help_Requests = []
+    trinitty.Loaded_Trinitty_Update_Requests = []
     trinitty.Loaded_Prompt_Requests = []
     trinitty.Loaded_Rnd_Requests = []
     trinitty.Loaded_Repeat_Requests = []
@@ -370,6 +371,44 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn("# True: utilise Vosk local pendant la lecture.", migrated)
         self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête", migrated)
         self.assertIn("# Mots/phrases d'arrêt séparés par virgule.", migrated)
+
+    def test_append_missing_user_config_options_removes_orphan_auto_comment_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            user_conf = Path(tmp) / "conf.trinity"
+            user_conf.write_text(
+                "\n".join(
+                    [
+                        "GPT4FREE_AUTO_REJECT_NOTWORKING = True",
+                        "# True: ignore les fournisseurs gpt4free marqués working=False.",
+                        "",
+                        "# Variables ajoutees depuis la configuration package sans remplacer les valeurs existantes.",
+                        "# True: ignore les fournisseurs gpt4free marqués working=False.",
+                    ]
+                )
+                + "\n"
+            )
+            original_packaged_config_text = trinitty.Packaged_Config_Text
+            trinitty.Packaged_Config_Text = lambda: "\n".join(
+                [
+                    "GPT4FREE_AUTO_REJECT_NOTWORKING = True",
+                    "# True: ignore les fournisseurs gpt4free marqués working=False.",
+                ]
+            )
+            try:
+                self.assertTrue(trinitty.Append_Missing_User_Config_Options(str(user_conf)))
+            finally:
+                trinitty.Packaged_Config_Text = original_packaged_config_text
+
+            migrated = user_conf.read_text()
+
+        self.assertEqual(1, migrated.count("GPT4FREE_AUTO_REJECT_NOTWORKING = True"))
+        self.assertNotIn("Variables ajoutees depuis la configuration package", migrated)
+
+    def test_config_option_value_ignores_comments_with_equals(self):
+        key, value = trinitty.Config_Option_Value("# True: ignore les fournisseurs working=False.")
+
+        self.assertIsNone(key)
+        self.assertIsNone(value)
 
     def test_tts_cache_round_trip_uses_text_hash(self):
         reset_command_state()
@@ -897,6 +936,52 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertIn("F_show_history", output.getvalue())
         self.assertIn("affiche*historique", output.getvalue())
+
+    def test_update_info_argument_prints_update_note_without_audio(self):
+        original_argv = trinitty.sys.argv
+        original_update = trinitty.Trinitty_Update_Info
+        calls = []
+        try:
+            trinitty.sys.argv = ["trinitty", "--update-info"]
+            trinitty.Trinitty_Update_Info = lambda play_audio=True: calls.append(play_audio) or True
+            self.assertTrue(trinitty.Handle_Utility_Args())
+        finally:
+            trinitty.sys.argv = original_argv
+            trinitty.Trinitty_Update_Info = original_update
+
+        self.assertEqual([False], calls)
+
+    def test_update_info_reads_packaged_note(self):
+        reset_command_state()
+        original_installed = trinitty.Installed_Trinitty_Version
+        original_pypi = trinitty.Pypi_Latest_Version
+        original_script_path = trinitty.SCRIPT_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            datas = root / "datas"
+            datas.mkdir()
+            (datas / "update_info.trinity").write_text("Titre: Test update\nRésumé:\nOK\n")
+            trinitty.SCRIPT_PATH = str(root)
+            trinitty.Installed_Trinitty_Version = lambda: "1.2.3"
+            trinitty.Pypi_Latest_Version = lambda: "1.2.4"
+            try:
+                text = trinitty.Trinitty_Update_Info_Text()
+            finally:
+                trinitty.Installed_Trinitty_Version = original_installed
+                trinitty.Pypi_Latest_Version = original_pypi
+                trinitty.SCRIPT_PATH = original_script_path
+
+        self.assertIn("Version installée: 1.2.3", text)
+        self.assertIn("Dernière version PyPI: 1.2.4", text)
+        self.assertIn("Titre: Test update", text)
+
+    def test_update_info_command_detects_with_cmd_debug(self):
+        reset_command_state()
+        trinitty.CMD_DBG = True
+        self.assertEqual(
+            "F_trinitty_update",
+            trinitty.Commandes("donne des informations concernant la dernière mise à jour de Trinitty"),
+        )
 
     def test_doctor_fix_argument_runs_dependency_installer(self):
         calls = []

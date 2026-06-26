@@ -213,11 +213,13 @@ Usage terminal:
   trinitty doctor --fix          Prépare les fichiers utilisateur puis lance l'installateur.
   trinitty --list-commands       Affiche les commandes vocales connues.
   trinitty --explain-command "phrase"  Explique quelle commande une phrase déclenche.
+  trinitty --update-info         Affiche les informations de la dernière mise à jour.
   trinitty --dependency-help     Affiche les commandes de réparation des dépendances.
   trinitty --install-launcher    Crée le lanceur propre dans ~/.local/bin/trinitty.
 
 Commandes vocales utiles:
   "affiche ton aide"                         Affiche cette aide et joue l'aide audio.
+  "informations de mise à jour de Trinitty"   Affiche la note de mise à jour.
   "fais une recherche internet sur ..."      Recherche sur le web.
   "fais une recherche wikipedia sur ..."     Recherche sur Wikipedia.
   "affiche l'historique"                     Affiche les échanges enregistrés.
@@ -254,6 +256,53 @@ def Trinitty_Help(play_audio=True):
     return True
 
 
+def Update_Info_File():
+    script_path = globals().get("SCRIPT_PATH", Default_Script_Path())
+    return os.path.join(script_path, "datas", "update_info.trinity")
+
+
+def Trinitty_Update_Info_Text():
+    update_file = Update_Info_File()
+    try:
+        with open(update_file) as f:
+            content = f.read().strip()
+    except OSError as e:
+        Log_Error("Trinitty_Update_Info_Text", e)
+        content = "Aucune note de mise à jour n'a été trouvée."
+
+    installed_version = ""
+    latest_version = ""
+    try:
+        installed_version = Installed_Trinitty_Version()
+    except Exception as e:
+        Log_Error("Trinitty_Update_Info_Text:Installed_Trinitty_Version", e)
+    try:
+        latest_version = Pypi_Latest_Version()
+    except Exception as e:
+        Log_Error("Trinitty_Update_Info_Text:Pypi_Latest_Version", e)
+
+    lines = ["Informations de mise à jour Trinitty:"]
+    if installed_version:
+        lines.append("Version installée: %s" % installed_version)
+    if latest_version:
+        lines.append("Dernière version PyPI: %s" % latest_version)
+    lines.append("Fichier de note: %s" % update_file)
+    lines.append("")
+    lines.append(content)
+    return "\n".join(lines).strip()
+
+
+def Trinitty_Update_Info(play_audio=True):
+    text = Trinitty_Update_Info_Text()
+    print(text)
+    if play_audio and not globals().get("INTERPRETOR", False):
+        try:
+            Text_To_Speech(text, stayawake=False, savehistory=False)
+        except Exception as e:
+            PRINT("\n-Trinitty:Trinitty_Update_Info():Text_To_Speech error:%s" % str(e))
+    return True
+
+
 def Ensure_Command_Registry_Loaded():
     global SCRIPT_PATH
     global CMDFILE, ALTFILE, TRIFILE, ACTFILE, PREFILE, SYNFILE
@@ -279,6 +328,7 @@ def Ensure_Command_Registry_Loaded():
 def Command_Function_Metadata():
     return [
         ("F_trinity_help", "Afficher l'aide generale", ["affiche ton aide"]),
+        ("F_trinitty_update", "Afficher les informations de mise a jour", ["informations de mise a jour de Trinitty"]),
         ("F_trinity_script", "Interroger le script Trinitty", ["affiche la fonction Check_History"]),
         ("F_prompt", "Passer en saisie clavier", ["invite de commande"]),
         ("F_search_web", "Faire une recherche web", ["fais une recherche internet sur albert einstein"]),
@@ -299,6 +349,7 @@ def Command_Function_Metadata():
 def Loaded_Command_Trigger_Count(function_name):
     mapping = {
         "F_trinity_help": "Loaded_Trinitty_Help_Requests",
+        "F_trinitty_update": "Loaded_Trinitty_Update_Requests",
         "F_trinity_script": "Loaded_Trinitty_Script_Requests",
         "F_prompt": "Loaded_Prompt_Requests",
         "F_search_web": "Loaded_Search_Web_Requests",
@@ -508,6 +559,9 @@ def Handle_Utility_Args():
         return True
     if command == "doctor":
         Trinitty_Doctor(fix="--fix" in sys.argv[2:])
+        return True
+    if command == "--update-info":
+        Trinitty_Update_Info(play_audio=False)
         return True
     if command == "--list-commands":
         print(List_Commands_Text())
@@ -814,6 +868,38 @@ def Config_Missing_Option_Block(lines, start_index):
     return block
 
 
+def Clean_User_Config_Auto_Merge_Blocks(user_text):
+    marker = "# Variables ajoutees depuis la configuration package sans remplacer les valeurs existantes."
+    lines = str(user_text or "").splitlines()
+    cleaned = []
+    index = 0
+    changed = False
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() != marker:
+            cleaned.append(line)
+            index += 1
+            continue
+
+        block = []
+        index += 1
+        while index < len(lines) and lines[index].strip() != marker:
+            block.append(lines[index])
+            index += 1
+
+        has_key = any(Config_Option_Value(block_line)[0] for block_line in block)
+        if has_key:
+            cleaned.append(line)
+            cleaned.extend(block)
+        else:
+            changed = True
+
+    cleaned_text = "\n".join(cleaned)
+    if user_text.endswith("\n") or cleaned_text:
+        cleaned_text += "\n"
+    return cleaned_text, changed
+
+
 def Append_Missing_User_Config_Options(user_conf):
     if not os.path.exists(user_conf):
         return False
@@ -825,6 +911,10 @@ def Append_Missing_User_Config_Options(user_conf):
     with open(user_conf) as f:
         user_text = f.read()
 
+    cleaned_user_text, cleaned = Clean_User_Config_Auto_Merge_Blocks(user_text)
+    if cleaned:
+        user_text = cleaned_user_text
+
     existing_keys = set(Config_Keys_From_Text(user_text))
     missing_lines = []
     packaged_lines = packaged_text.splitlines()
@@ -835,9 +925,14 @@ def Append_Missing_User_Config_Options(user_conf):
             existing_keys.add(key)
 
     if not missing_lines:
+        if cleaned:
+            with open(user_conf, "w") as f:
+                f.write(user_text)
+            return True
         return False
 
-    with open(user_conf, "a") as f:
+    with open(user_conf, "w") as f:
+        f.write(user_text)
         if user_text and not user_text.endswith("\n"):
             f.write("\n")
         f.write("\n# Variables ajoutees depuis la configuration package sans remplacer les valeurs existantes.\n")
@@ -2700,9 +2795,11 @@ def Strip_Config_Inline_Comment(value):
 
 
 def Config_Option_Value(line):
-    if "=" not in line:
+    raw_line = str(line or "")
+    stripped = raw_line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in raw_line:
         return None, None
-    key, value = line.split("=", 1)
+    key, value = raw_line.split("=", 1)
     key = key.strip()
     value = Strip_Config_Inline_Comment(value).strip().strip("'\"")
     return key, value
@@ -4402,6 +4499,7 @@ def Load_Csv():
     global Loaded_Trinitty_Dev_Requests
     global Loaded_Trinitty_Script_Requests
     global Loaded_Trinitty_Help_Requests
+    global Loaded_Trinitty_Update_Requests
     global Loaded_Prompt_Requests
     global Loaded_Rnd_Requests
     global Loaded_Read_Results
@@ -4430,6 +4528,7 @@ def Load_Csv():
     Loaded_Trinitty_Dev_Requests = []
     Loaded_Trinitty_Script_Requests = []
     Loaded_Trinitty_Help_Requests = []
+    Loaded_Trinitty_Update_Requests = []
     Loaded_Prompt_Requests = []
     Loaded_Rnd_Requests = []
     Loaded_Repeat_Requests = []
@@ -4540,6 +4639,14 @@ def Load_Csv():
                                     Loaded_Trinitty_Help_Requests.append(t)
                             else:
                                 Loaded_Trinitty_Help_Requests.append(trigger)
+                    elif function == "F_trinitty_update":
+                        check_trigger = Special_Syntax(trigger, CMDFILE, line_no)
+                        if check_trigger:
+                            if isinstance(check_trigger, list):
+                                for t in check_trigger:
+                                    Loaded_Trinitty_Update_Requests.append(t)
+                            else:
+                                Loaded_Trinitty_Update_Requests.append(trigger)
                     elif function == "F_prompt":
                         check_trigger = Special_Syntax(trigger, CMDFILE, line_no)
                         if check_trigger:
@@ -5050,6 +5157,14 @@ def Load_Csv():
                                     Loaded_Trinitty_Help_Requests.append(t)
                             else:
                                 Loaded_Trinitty_Help_Requests.append(trigger)
+                    elif function == "F_trinitty_update":
+                        check_trigger = Special_Syntax(trigger, ALTFILE, line_no)
+                        if check_trigger:
+                            if isinstance(check_trigger, list):
+                                for t in check_trigger:
+                                    Loaded_Trinitty_Update_Requests.append(t)
+                            else:
+                                Loaded_Trinitty_Update_Requests.append(trigger)
                     elif function == "F_prompt":
                         check_trigger = Special_Syntax(trigger, ALTFILE, line_no)
                         if check_trigger:
@@ -5239,6 +5354,15 @@ def Add_Trigger(trigger_input=None, func_name_to_add=None, specific_trigger=None
                 "[montre{-/*/}/affiche{-/*/}] [moi/] [*/l']aide * [ton/votre/du] script [*trinitty/]",
                 Loaded_Trinitty_Help_Requests,
                 "F_trinity_help",
+            ),
+            (
+                "Trinitty_Update_Info()",
+                "pour afficher les informations de la dernière mise à jour de Trinitty",
+                "Donne les informations concernant la dernière mise à jour de Trinitty.",
+                "informations*mise a jour*trinitty",
+                "[donne/affiche/liste] [les/des/] [informations/infos/notes] * mise a jour * trinitty",
+                Loaded_Trinitty_Update_Requests,
+                "F_trinitty_update",
             ),
             (
                 "Prompt()",
@@ -5783,6 +5907,7 @@ def Command_Trigger_Lists_By_Name():
         "Loaded_Trinitty_Dev_Requests": Loaded_Trinitty_Dev_Requests,
         "Loaded_Trinitty_Script_Requests": Loaded_Trinitty_Script_Requests,
         "Loaded_Trinitty_Help_Requests": Loaded_Trinitty_Help_Requests,
+        "Loaded_Trinitty_Update_Requests": Loaded_Trinitty_Update_Requests,
         "Loaded_Prompt_Requests": Loaded_Prompt_Requests,
         "Loaded_Rnd_Requests": Loaded_Rnd_Requests,
         "Loaded_Repeat_Requests": Loaded_Repeat_Requests,
@@ -6237,6 +6362,8 @@ def Check_Ambiguity(txt_input,allowed_functions=None, to_match=None, to_get=None
 
         found_trinitty_help = ("F_trinity_help", SeeknReturn(trigger, Loaded_Trinitty_Help_Requests))
 
+        found_trinitty_update = ("F_trinitty_update", SeeknReturn(trigger, Loaded_Trinitty_Update_Requests))
+
         found_prompt = ("F_prompt", SeeknReturn(trigger, Loaded_Prompt_Requests))
 
         found_rnd = ("F_rnd", SeeknReturn(trigger, Loaded_Rnd_Requests))
@@ -6286,6 +6413,7 @@ def Check_Ambiguity(txt_input,allowed_functions=None, to_match=None, to_get=None
                 found_trinitty_dev,
                 found_trinitty_script,
                 found_trinitty_help,
+                found_trinitty_update,
                 found_prompt,
                 found_rnd,
 	                 found_repeat,
@@ -6320,6 +6448,7 @@ def Check_Ambiguity(txt_input,allowed_functions=None, to_match=None, to_get=None
                  found_trinitty_dev,
                  found_trinitty_script,
                  found_trinitty_help,
+                 found_trinitty_update,
                  found_prompt,
                  found_rnd,
 	                 found_repeat,
@@ -6425,6 +6554,7 @@ def Command_Classifier_Command_Texts():
         Loaded_Trinitty_Dev_Requests,
         Loaded_Trinitty_Script_Requests,
         Loaded_Trinitty_Help_Requests,
+        Loaded_Trinitty_Update_Requests,
         Loaded_Prompt_Requests,
         Loaded_Rnd_Requests,
         Loaded_Repeat_Requests,
@@ -6613,6 +6743,32 @@ def Detect_Trinitty_Help_Request(text):
     return bool(re.search(help_words, normalized) and re.search(action_words, normalized))
 
 
+def Detect_Trinitty_Update_Request(text):
+    normalized = Normalize_Help_Command_Text(text)
+    if not normalized:
+        return False
+
+    trinitty_markers = {"trinitty", "trinity", "assistant", "programme"}
+    tokens = set(normalized.split())
+    if not tokens.intersection(trinitty_markers):
+        return False
+
+    update_patterns = [
+        r"\bmise [aà] jour\b",
+        r"\bmises [aà] jour\b",
+        r"\bmaj\b",
+        r"\bderni[eè]re version\b",
+        r"\bversion r[eé]cente\b",
+        r"\bquoi de nouveau\b",
+        r"\bnouveaute\b",
+        r"\bnouveaut[eé]\b",
+        r"\bnouveautes\b",
+        r"\bnouveaut[eé]s\b",
+        r"\bchangelog\b",
+    ]
+    return any(re.search(pattern, normalized) for pattern in update_patterns)
+
+
 def Results_Hub_Direct_Command(text, allowed_functions=None):
     normalized = Results_Hub_Normalize_Text(text)
     normalized = re.sub(r"[^a-z0-9]+", " ", normalized).strip()
@@ -6716,6 +6872,16 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             return "F_trinity_help"
         return Trinitty_Help()
 
+    if (
+        from_function != "Results_Hub"
+        and (allowed_functions is None or "F_trinitty_update" in allowed_functions)
+        and Detect_Trinitty_Update_Request(decoded)
+    ):
+        PRINT("\n-Trinitty:Commandes():direct update info command.")
+        if CMD_DBG or from_function:
+            return "F_trinitty_update"
+        return Trinitty_Update_Info()
+
     #    filter = ["s'il te plait","si te plait","sil te plait","merci"," stp "]
     #    to_remove = [" fais ","estce"," peux faire "," recherche ","faismoi"," fais ","peux ","fais recherche "," parle ","s'il te plait"," stp "," svp"," sur ","sil plait"]
     #    decoded = SeeknDestroy(filter, decoded)
@@ -6803,6 +6969,9 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             return True
         if goto == "F_trinity_help":
             return Trinitty_Help()
+
+        if goto == "F_trinitty_update":
+            return Trinitty_Update_Info()
 
         if goto == "F_trinity_script":
             Trinitty_Script(decoded)
@@ -11954,6 +12123,7 @@ if __name__ == "__main__":
     Loaded_Trinitty_Dev_Requests = []
     Loaded_Trinitty_Script_Requests = []
     Loaded_Trinitty_Help_Requests = []
+    Loaded_Trinitty_Update_Requests = []
     Loaded_Prompt_Requests = []
     Loaded_Rnd_Requests = []
     Loaded_Read_Results = []

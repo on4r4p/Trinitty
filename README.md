@@ -83,10 +83,13 @@ trinitty -h
 trinitty --help
 trinitty --list-commands
 trinitty --explain-command "affiche l'historique"
+trinitty --update-info
 trinitty doctor
 ```
 
 Dans l'assistant, les commandes vocales comme `affiche l'aide`, `affiche les commandes` ou `quelles sont les fonctions` affichent cette aide et jouent l'aide audio.
+
+`trinitty --update-info` affiche la note de dernière mise à jour fournie avec le package. Dans l'assistant, demander par exemple `informations de mise à jour de Trinitty`.
 
 Après une recherche web, Wikipedia ou historique, les résultats restent pilotables par la voix: `lis le résultat numéro 3`, `ouvre le résultat numéro 3`, `lis les trois premiers`, `choisis au hasard`, `attends` ou `quitte`.
 
