@@ -21,6 +21,10 @@ WEB_SEARCH_TIMEOUT = 60
 # Délai maximum en secondes pour les recherches web et moteurs de fallback.
 READ_LINK_TIMEOUT = 60
 # Délai maximum en secondes pour lire une page web.
+READ_LINK_MIN_CHARS = 220
+# Nombre minimal de caractères avant de considérer qu'une page web a fourni un texte lisible.
+READ_LINK_MAX_CHARS = 6000
+# Nombre maximal de caractères lus depuis une page web avant coupure.
 PYPI_VERSION_TIMEOUT = 60
 # Délai maximum en secondes pour vérifier la version publiée sur PyPI.
 GPT4FREE_PROBE_TIMEOUT = 15
@@ -56,8 +60,8 @@ TTS_CACHE_ENABLED = True
 TTS_CACHE_DIR = cache/tts
 # Dossier du cache TTS relatif au dossier utilisateur Trinitty.
 
-RESPONSE_STREAMING_ENABLED = True
-# True: commence la synthèse vocale dès qu'OpenAI fournit un segment de réponse exploitable.
+RESPONSE_STREAMING_ENABLED = False
+# True: commence la synthèse vocale dès qu'OpenAI fournit un segment de réponse exploitable. False privilégie une réponse concaténée plus stable.
 RESPONSE_STREAM_MIN_CHARS = 120
 # Taille minimale d'un segment avant lecture si une ponctuation permet une coupure naturelle.
 RESPONSE_STREAM_MAX_CHARS = 450
@@ -116,6 +120,10 @@ PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête,pause,tais toi,taisez v
 # Mots/phrases d'arrêt séparés par virgule pour le détecteur local pendant lecture.
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
 # Taille des petits blocs audio analysés par Vosk pendant la lecture.
+PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
+# True: autorise les résultats partiels Vosk. False réduit fortement les faux positifs.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350
+# Niveau audio minimal pour accepter une commande stop/arrête. Augmenter si Trinitty s'arrête sans parole.
 
 COMMAND_CLASSIFIER_ENABLED = False
 # True: utiliser le classifieur TensorFlow optionnel.

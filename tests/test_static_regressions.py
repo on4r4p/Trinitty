@@ -66,7 +66,7 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
         self.assertIn("SAVED_ANSWER = default", conf)
         self.assertIn("CHECK_UPDATE = False", conf)
         self.assertIn("DEBUG = False", conf)
-        self.assertIn("RESPONSE_STREAMING_ENABLED = True", conf)
+        self.assertIn("RESPONSE_STREAMING_ENABLED = False", conf)
         self.assertIn("HISTORY_INDEX_ENABLED = True", conf)
         self.assertIn("datas/conf.local.trinity", self.source)
         self.assertNotIn("g4f.Provider.you", self.source)

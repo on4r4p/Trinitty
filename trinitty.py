@@ -282,13 +282,16 @@ def Trinitty_Update_Info_Text():
         Log_Error("Trinitty_Update_Info_Text:Pypi_Latest_Version", e)
 
     lines = ["Informations de mise à jour Trinitty:"]
-    if installed_version:
-        lines.append("Version installée: %s" % installed_version)
-    if latest_version:
-        lines.append("Dernière version PyPI: %s" % latest_version)
-    lines.append("Fichier de note: %s" % update_file)
+    if installed_version and latest_version and installed_version != latest_version:
+        lines.append("Version: installée %s, PyPI %s" % (installed_version, latest_version))
+    elif installed_version or latest_version:
+        lines.append("Version: %s" % (installed_version or latest_version))
     lines.append("")
-    lines.append(content)
+    content_lines = [
+        line for line in content.splitlines()
+        if not re.match(r"^\s*(version|version installée|dernière version pypi)\s*:", line, flags=re.IGNORECASE)
+    ]
+    lines.append("\n".join(content_lines).strip())
     return "\n".join(lines).strip()
 
 
@@ -953,6 +956,14 @@ def Migrate_User_Config_Defaults(user_conf):
         "PLAYBACK_INTERRUPT_ENABLED = False "
         "#True records during playback to listen for stop commands"
     )
+    old_response_streaming_defaults = {
+        "RESPONSE_STREAMING_ENABLED = True",
+        "RESPONSE_STREAMING_ENABLED = True # True: commence la synthèse vocale dès qu'OpenAI fournit un segment de réponse exploitable.",
+    }
+    new_response_streaming_default = (
+        "RESPONSE_STREAMING_ENABLED = False "
+        "# False privilégie une réponse concaténée plus stable"
+    )
 
     with open(user_conf) as f:
         lines = f.readlines()
@@ -964,6 +975,9 @@ def Migrate_User_Config_Defaults(user_conf):
         stripped = line.strip()
         if stripped in old_playback_interrupt_defaults:
             migrated_lines.append(new_playback_interrupt_default + newline)
+            changed = True
+        elif stripped in old_response_streaming_defaults:
+            migrated_lines.append(new_response_streaming_default + newline)
             changed = True
         else:
             migrated_lines.append(line)
@@ -1932,6 +1946,8 @@ PLAYBACK_INTERRUPT_ENABLED = False
 PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
 PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350
 WAKE_WORD_LOCAL_STT_ENABLED = True
 WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
 WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
@@ -1956,13 +1972,15 @@ GOOGLE_STT_TIMEOUT = 20.0
 GOOGLE_LANGUAGE_TIMEOUT = 8.0
 WEB_SEARCH_TIMEOUT = 10.0
 READ_LINK_TIMEOUT = 10.0
+READ_LINK_MIN_CHARS = 220
+READ_LINK_MAX_CHARS = 6000
 PYPI_VERSION_TIMEOUT = 5.0
 GPT4FREE_PROBE_TIMEOUT = 15.0
 GPT4FREE_SUBPROCESS_ENABLED = True
 GPT4FREE_RUNTIME_ERROR = ""
 TTS_CACHE_ENABLED = True
 TTS_CACHE_DIR = "cache/tts"
-RESPONSE_STREAMING_ENABLED = True
+RESPONSE_STREAMING_ENABLED = False
 RESPONSE_STREAM_MIN_CHARS = 120
 RESPONSE_STREAM_MAX_CHARS = 450
 TTS_PARALLEL_WORKERS = 1
@@ -2298,7 +2316,7 @@ def To_Gpt(input, wait_audio=None):
 
     last_sentence.put(input)
 
-    if Config_Bool(globals().get("RESPONSE_STREAMING_ENABLED", True), default=True):
+    if Config_Bool(globals().get("RESPONSE_STREAMING_ENABLED", False), default=False):
         streamed = Text_To_Speech_Streamed(
             Openai_Gpt_Stream(input),
             stayawake=False,
@@ -7535,12 +7553,127 @@ def Google_Custom_Search_Query(to_search, start=1, site_search="", sort_by_date=
     )
 
 
+def Read_Link_Text_Limits():
+    min_chars = int(Config_Positive_Float(globals().get("READ_LINK_MIN_CHARS", 220), 220))
+    max_chars = int(Config_Positive_Float(globals().get("READ_LINK_MAX_CHARS", 6000), 6000))
+    return min_chars, max(max_chars, min_chars)
+
+
+def Clean_Read_Link_Line(text):
+    line = html.unescape(str(text or ""))
+    line = re.sub(r"\s+", " ", line).strip()
+    return line
+
+
+def Clean_Read_Link_Text(text, max_chars=None):
+    lines = []
+    seen = set()
+    for raw_line in str(text or "").splitlines():
+        line = Clean_Read_Link_Line(raw_line)
+        if len(line) < 3:
+            continue
+        normalized = Results_Hub_Normalize_Text(line)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        lines.append(line)
+    cleaned = "\n\n".join(lines).strip()
+    if max_chars and len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars].rsplit(" ", 1)[0].strip() + "..."
+    return cleaned
+
+
+def Read_Link_Text_From_Soup(soup, selector=None):
+    if selector:
+        containers = soup.select(selector)
+    else:
+        containers = [soup.body or soup]
+    tag_names = ["h1", "h2", "h3", "h4", "p", "li", "blockquote", "figcaption", "tr"]
+    lines = []
+    for container in containers:
+        for tag in container.find_all(tag_names):
+            line = Clean_Read_Link_Line(tag.get_text(" ", strip=True))
+            if line:
+                lines.append(line)
+    return "\n".join(lines)
+
+
+def Read_Link_Meta_Text(soup):
+    values = []
+    for attrs in [
+        {"property": "og:description"},
+        {"name": "description"},
+        {"name": "twitter:description"},
+    ]:
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content"):
+            values.append(tag.get("content"))
+    return "\n".join(values)
+
+
+def Extract_Read_Link_Text(response_text, fallback_text="", urlinput=""):
+    min_chars, max_chars = Read_Link_Text_Limits()
+    soup = BeautifulSoup(response_text, "html.parser")
+    for tag in soup(["script", "style", "noscript", "nav", "header", "footer", "form", "button", "svg", "aside"]):
+        tag.decompose()
+
+    candidates = []
+    for selector in ["article", "main", "[role='main']", ".article", ".article-content", ".content", "#content"]:
+        text = Clean_Read_Link_Text(Read_Link_Text_From_Soup(soup, selector=selector), max_chars=max_chars)
+        if text:
+            candidates.append(text)
+
+    full_text = Clean_Read_Link_Text(Read_Link_Text_From_Soup(soup), max_chars=max_chars)
+    if full_text:
+        candidates.append(full_text)
+
+    best_text = max(candidates, key=len) if candidates else ""
+    if len(best_text) >= min_chars:
+        return best_text
+
+    meta_text = Clean_Read_Link_Text(Read_Link_Meta_Text(soup), max_chars=max_chars)
+    fallback_text = Clean_Read_Link_Text(re.sub(r"https?://\S+", "", str(fallback_text or "")), max_chars=max_chars)
+    fallback_parts = []
+    if meta_text:
+        fallback_parts.append(meta_text)
+    if fallback_text and fallback_text not in fallback_parts:
+        fallback_parts.append(fallback_text)
+    if best_text and best_text not in fallback_parts:
+        fallback_parts.append(best_text)
+    if fallback_parts:
+        parsed_source = urlparse(str(urlinput or ""))
+        source = parsed_source.netloc or "cette page"
+        return (
+            "Je n'ai pas pu extraire beaucoup de texte lisible depuis %s. "
+            "Voici les informations disponibles:\n\n%s"
+            % (source, "\n\n".join(fallback_parts))
+        )
+    return ""
+
+
+def Read_Link_Url(urlinput, txtinput=None):
+    response = requests.get(
+        urlinput,
+        headers=SEARCH_HTTP_HEADERS,
+        timeout=Config_Positive_Float(globals().get("READ_LINK_TIMEOUT", 10.0), 10.0),
+    )
+    response.raise_for_status()
+    return Extract_Read_Link_Text(response.text, fallback_text=txtinput, urlinput=urlinput)
+
+
 def ReadLink(txtinput=None, titleinput=None, urlinput=None):
 
     PRINT("\n-Trinitty: txtinput: %s", txtinput)
 
     if not urlinput:
         urlinput = Extract_First_Url(txtinput)
+
+    if not urlinput:
+        Play_Audio_File(SCRIPT_PATH + "/local_sounds/question/read_link_url.wav")
+        url_input = input("Entrez un lien:")
+        urlinput = Extract_First_Url(url_input)
+
+    urlinput = str(urlinput or "").strip()
 
     if len(urlinput) > 0:
         if "wikipedia" in urlinput:
@@ -7557,63 +7690,10 @@ def ReadLink(txtinput=None, titleinput=None, urlinput=None):
             return Wikipedia(txtinput)
 
         try:
-
-            response = requests.get(
-                urlinput,
-                timeout=Config_Positive_Float(globals().get("READ_LINK_TIMEOUT", 10.0), 10.0),
-            )
-            soup = BeautifulSoup(response.text, "html.parser")
-            text_data = ""
-            for tag in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
-                text_data += tag.get_text()
-            if len(text_data) > 0:
+            text_data = Read_Link_Url(urlinput, txtinput=txtinput)
+            if text_data:
                 Play_Audio_File(SCRIPT_PATH + "/local_sounds/ok/reading_link.wav")
-                last_sentence.put(txtinput + " %s" % urlinput)
-                Text_To_Speech(text_data, stayawake=True)
-                return ()
-            Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_read_link_no_txt.wav")
-            return ()
-        except Exception as e:
-            PRINT("\n-Trinitty:Error:", str(e))
-            Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_read_link_request.wav")
-
-    else:
-        Play_Audio_File(SCRIPT_PATH + "/local_sounds/question/read_link_url.wav")
-
-        url_input = input("Entrez un lien:")
-
-        urlinput = Extract_First_Url(url_input)
-
-    if len(urlinput) > 0:
-        #           if "wikipedia" in urlinput: ##TO REWRITE
-
-        #               if not titleinput: ####ToCHECKurlinputVStxtinput
-        #                   wiki_title = GetTitleLink(txtinput,"wikipedia")
-        #               else:
-        #                   wiki_title = titleinput
-        #
-        #               if wiki_title:
-        #                   PRINT("\n-Trinitty:wiki_title:",wiki_title)
-        #                   return(Wikipedia(txtinput,title=wiki_title))
-
-        #               else:
-        #                   PRINT("\n-Trinitty:Pas de titre title utilisation de txtinput:",txtintput)
-        #                   return(Wikipedia(txtinput))
-
-        #           else:
-        try:
-
-            response = requests.get(
-                urlinput,
-                timeout=Config_Positive_Float(globals().get("READ_LINK_TIMEOUT", 10.0), 10.0),
-            )
-            soup = BeautifulSoup(response.text, "html.parser")
-            text_data = ""
-            for tag in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
-                text_data += tag.get_text()
-            if len(text_data) > 0:
-                Play_Audio_File(SCRIPT_PATH + "/local_sounds/ok/reading_link.wav")
-                last_sentence.put(txtinput + " %s" % urlinput)
+                last_sentence.put("%s %s" % (txtinput or "", urlinput))
                 Text_To_Speech(text_data, stayawake=True)
                 return ()
             Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_read_link_no_txt.wav")
@@ -7622,7 +7702,8 @@ def ReadLink(txtinput=None, titleinput=None, urlinput=None):
             PRINT("\n-Trinitty:Error:", str(e))
             Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_read_link_request.wav")
             return ()
-    else:
+
+    if not urlinput:
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_url_not_valid.wav")
         return ()
     return None
@@ -8861,6 +8942,15 @@ def Playback_Interrupt_Local_STT_Text(payload, key="text"):
     return str(data.get(key) or "").strip()
 
 
+def Pcm_Rms_Level(pcm):
+    pcm = bytes(pcm or b"")
+    sample_count = len(pcm) // 2
+    if sample_count <= 0:
+        return 0.0
+    samples = struct.unpack("<%dh" % sample_count, pcm[: sample_count * 2])
+    return (sum(sample * sample for sample in samples) / sample_count) ** 0.5
+
+
 def Playback_Interrupt_Local_STT_Warn(key, message):
     warnings = globals().setdefault("PLAYBACK_INTERRUPT_LOCAL_STT_WARNINGS", set())
     if key in warnings:
@@ -8897,6 +8987,14 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
         0.25,
     )
     frames_per_buffer = max(800, int(16000 * chunk_seconds))
+    partial_enabled = Config_Bool(
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED", False),
+        default=False,
+    )
+    min_rms = Config_Nonnegative_Float(
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS", 350.0),
+        350.0,
+    )
     deadline = None
     if timeout is not None:
         timeout = float(timeout)
@@ -8908,6 +9006,8 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
     pa = None
     audio_lock = globals().get("AUDIO_DEVICE_LOCK")
     audio_lock_acquired = False
+    recent_rms_levels = []
+    rms_window_chunks = max(1, int(1.0 / chunk_seconds))
     try:
         try:
             model = Get_Vosk_Model()
@@ -8933,18 +9033,31 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
         )
         while not stop_event.is_set() and (deadline is None or time.monotonic() < deadline):
             pcm = audio_stream.read(frames_per_buffer, exception_on_overflow=False)
-            if recognizer.AcceptWaveform(pcm):
+            if stop_event.is_set():
+                break
+            current_rms = Pcm_Rms_Level(pcm)
+            recent_rms_levels.append(current_rms)
+            recent_rms_levels = recent_rms_levels[-rms_window_chunks:]
+            recent_max_rms = max(recent_rms_levels or [current_rms])
+            accepted = recognizer.AcceptWaveform(pcm)
+            if accepted:
                 text = Playback_Interrupt_Local_STT_Text(recognizer.Result())
-            else:
+            elif partial_enabled:
                 text = Playback_Interrupt_Local_STT_Text(recognizer.PartialResult(), key="partial")
-            if text and Playback_Stop_Command_Detected(text):
+            else:
+                text = ""
+            decision_rms = recent_max_rms if accepted else current_rms
+            if text and (min_rms <= 0 or decision_rms >= min_rms) and Playback_Stop_Command_Detected(text):
                 PRINT("\n-Trinitty:Playback interrupt local STT detected:%s" % text)
                 cancel_operation.put(True)
                 stop_event.set()
                 return True
-        if recognizer is not None:
+            if text and decision_rms < min_rms:
+                PRINT("\n-Trinitty:Playback interrupt local STT ignored low audio:%s rms:%s" % (text, decision_rms))
+        if recognizer is not None and not stop_event.is_set():
             text = Playback_Interrupt_Local_STT_Text(recognizer.FinalResult())
-            if text and Playback_Stop_Command_Detected(text):
+            recent_max_rms = max(recent_rms_levels or [0.0])
+            if text and (min_rms <= 0 or recent_max_rms >= min_rms) and Playback_Stop_Command_Detected(text):
                 cancel_operation.put(True)
                 stop_event.set()
                 return True
@@ -9926,7 +10039,7 @@ def Display_Result(result_object, result_number=None):
    return display_text
 
 
-def Read_Results(result_object):
+def Read_Results(result_object, stayawake=False):
 
    PRINT("\n-Trinitty:Read_Results:object:%s" % (result_object,))
    text = Result_Text(result_object)
@@ -9939,7 +10052,7 @@ def Read_Results(result_object):
       return text
 
    try:
-      Text_To_Speech(text, stayawake=False, savehistory=False)
+      Text_To_Speech(text, stayawake=stayawake, savehistory=False)
    except Exception as e:
       PRINT("\n-Trinitty:Read_Results():Text_To_Speech error:%s" % str(e))
    return text
@@ -10235,7 +10348,7 @@ def Results_Hub_Handle_Command(command, results_list, command_text=None, from_fu
 
     if command == "F_read_results":
         selected_results = Results_Hub_Select_Results(command_text, results_list, default_all=True)
-        Read_Results(selected_results)
+        Read_Results(selected_results, stayawake=True)
         return Go_Back_To_Sleep(go_trinitty=True)
 
     if command == "F_read_link":
@@ -10261,7 +10374,7 @@ def Results_Hub_Handle_Command(command, results_list, command_text=None, from_fu
     if command == "F_rnd":
         if not results_list:
             return RESULTS_HUB_CONTINUE
-        Read_Results([Non_Crypto_Choice(results_list)])
+        Read_Results([Non_Crypto_Choice(results_list)], stayawake=True)
         return Go_Back_To_Sleep(go_trinitty=True)
 
     if command == "F_quit":
@@ -11284,6 +11397,8 @@ def GetConf():
     global PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED
     global PLAYBACK_INTERRUPT_LOCAL_STT_WORDS
     global PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS
+    global PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED
+    global PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS
     global WAIT_FOR_TIMEOUT
     global WAIT_FOR_POLL_INTERVAL
     global PLAYBACK_POLL_INTERVAL
@@ -11311,6 +11426,8 @@ def GetConf():
     global GOOGLE_LANGUAGE_TIMEOUT
     global WEB_SEARCH_TIMEOUT
     global READ_LINK_TIMEOUT
+    global READ_LINK_MIN_CHARS
+    global READ_LINK_MAX_CHARS
     global PYPI_VERSION_TIMEOUT
     global GPT4FREE_PROBE_TIMEOUT
     global GPT4FREE_SUBPROCESS_ENABLED
@@ -11345,6 +11462,8 @@ def GetConf():
         "PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED",
         "PLAYBACK_INTERRUPT_LOCAL_STT_WORDS",
         "PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS",
+        "PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED",
+        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS",
         "WAIT_FOR_TIMEOUT",
         "WAIT_FOR_POLL_INTERVAL",
         "PLAYBACK_POLL_INTERVAL",
@@ -11372,6 +11491,8 @@ def GetConf():
         "GOOGLE_LANGUAGE_TIMEOUT",
         "WEB_SEARCH_TIMEOUT",
         "READ_LINK_TIMEOUT",
+        "READ_LINK_MIN_CHARS",
+        "READ_LINK_MAX_CHARS",
         "PYPI_VERSION_TIMEOUT",
         "GPT4FREE_PROBE_TIMEOUT",
         "GPT4FREE_SUBPROCESS_ENABLED",
@@ -11474,6 +11595,12 @@ def GetConf():
             elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS":
                 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = Config_Positive_Float(conf, 0.25)
 
+            elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED":
+                PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = Config_Bool(conf, default=False)
+
+            elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS":
+                PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = Config_Nonnegative_Float(conf, 350.0)
+
             elif option == "WAIT_FOR_TIMEOUT":
                 WAIT_FOR_TIMEOUT = Config_Positive_Float(conf, 30.0)
 
@@ -11566,6 +11693,12 @@ def GetConf():
             elif option == "READ_LINK_TIMEOUT":
                 READ_LINK_TIMEOUT = Config_Positive_Float(conf, 10.0)
 
+            elif option == "READ_LINK_MIN_CHARS":
+                READ_LINK_MIN_CHARS = int(Config_Positive_Float(conf, 220))
+
+            elif option == "READ_LINK_MAX_CHARS":
+                READ_LINK_MAX_CHARS = int(Config_Positive_Float(conf, 6000))
+
             elif option == "PYPI_VERSION_TIMEOUT":
                 PYPI_VERSION_TIMEOUT = Config_Positive_Float(conf, 5.0)
 
@@ -11594,7 +11727,7 @@ def GetConf():
                 TTS_CACHE_DIR = conf
 
             elif option == "RESPONSE_STREAMING_ENABLED":
-                RESPONSE_STREAMING_ENABLED = Config_Bool(conf, default=True)
+                RESPONSE_STREAMING_ENABLED = Config_Bool(conf, default=False)
 
             elif option == "RESPONSE_STREAM_MIN_CHARS":
                 try:
@@ -11740,6 +11873,8 @@ STT_LOCAL_FALLBACK_ENABLED = False
 STT_LOCAL_MODEL_PATH = models/vosk-model-small-fr-0.22
 WEB_SEARCH_TIMEOUT = 10
 READ_LINK_TIMEOUT = 10
+READ_LINK_MIN_CHARS = 220
+READ_LINK_MAX_CHARS = 6000
 PYPI_VERSION_TIMEOUT = 5
 GPT4FREE_PROBE_TIMEOUT = 15
 WAIT_FOR_TIMEOUT = 30
@@ -11747,7 +11882,7 @@ WAIT_FOR_POLL_INTERVAL = 0.05
 PLAYBACK_POLL_INTERVAL = 0.05
 TTS_CACHE_ENABLED = True
 TTS_CACHE_DIR = cache/tts
-RESPONSE_STREAMING_ENABLED = True
+RESPONSE_STREAMING_ENABLED = False
 RESPONSE_STREAM_MIN_CHARS = 120
 RESPONSE_STREAM_MAX_CHARS = 450
 TTS_PARALLEL_WORKERS = 1
@@ -11775,6 +11910,8 @@ PLAYBACK_INTERRUPT_TIMEOUT = 30 # Durée maximale d'écoute pendant une lecture.
 PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True # True: utilise Vosk local pour détecter stop/arrête pendant la lecture si un modèle est disponible.
 PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute # Mots/phrases d'arrêt séparés par virgule.
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25 # Taille des petits blocs audio analysés par Vosk.
+PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False # True: autorise les résultats partiels Vosk.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350 # Niveau audio minimal pour accepter une commande stop/arrête.
 COMMAND_CLASSIFIER_ENABLED = False # True: utiliser le classifieur TensorFlow optionnel.
 COMMAND_CLASSIFIER_THRESHOLD = 0.65 # Score minimal du classifieur pour accepter une commande.
 COMMAND_CLASSIFIER_MODEL_PATH = datas/command_classifier.keras
@@ -11804,6 +11941,8 @@ XCB_ERROR_FIX = False # True: masque certains avertissements XCB liés à DISPLA
         GOOGLE_LANGUAGE_TIMEOUT = 8.0
         WEB_SEARCH_TIMEOUT = 10.0
         READ_LINK_TIMEOUT = 10.0
+        READ_LINK_MIN_CHARS = 220
+        READ_LINK_MAX_CHARS = 6000
         PYPI_VERSION_TIMEOUT = 5.0
         GPT4FREE_PROBE_TIMEOUT = 15.0
         GPT4FREE_SUBPROCESS_ENABLED = True
@@ -11814,7 +11953,7 @@ XCB_ERROR_FIX = False # True: masque certains avertissements XCB liés à DISPLA
         WAKE_WORD_LOCAL_STT_TIMEOUT = 0.0
         TTS_CACHE_ENABLED = True
         TTS_CACHE_DIR = "cache/tts"
-        RESPONSE_STREAMING_ENABLED = True
+        RESPONSE_STREAMING_ENABLED = False
         RESPONSE_STREAM_MIN_CHARS = 120
         RESPONSE_STREAM_MAX_CHARS = 450
         TTS_PARALLEL_WORKERS = 1
@@ -11999,6 +12138,8 @@ if __name__ == "__main__":
     PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
     PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
     PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
+    PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
+    PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350
     WAKE_WORD_LOCAL_STT_ENABLED = True
     WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
     WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
@@ -12045,11 +12186,13 @@ if __name__ == "__main__":
     GOOGLE_LANGUAGE_TIMEOUT = 8.0
     WEB_SEARCH_TIMEOUT = 10.0
     READ_LINK_TIMEOUT = 10.0
+    READ_LINK_MIN_CHARS = 220
+    READ_LINK_MAX_CHARS = 6000
     PYPI_VERSION_TIMEOUT = 5.0
     GPT4FREE_PROBE_TIMEOUT = 15.0
     TTS_CACHE_ENABLED = True
     TTS_CACHE_DIR = "cache/tts"
-    RESPONSE_STREAMING_ENABLED = True
+    RESPONSE_STREAMING_ENABLED = False
     RESPONSE_STREAM_MIN_CHARS = 120
     RESPONSE_STREAM_MAX_CHARS = 450
     TTS_PARALLEL_WORKERS = 1
