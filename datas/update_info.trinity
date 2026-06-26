@@ -1,18 +1,17 @@
-Version: 0.1.37
-Titre: Reconnaissance vocale plus souple et contexte de dialogue récent
+Version: 0.1.38
+Titre: Garde de publication pour le récap de mise à jour
 Date: 2026-06-26
 
 Résumé:
-Cette mise à jour rend la validation Speech-to-Text plus juste sur les phrases longues. Trinitty n'utilise plus un nombre fixe de mots incertains: la limite est calculée selon la longueur de la phrase avec STT_BAD_WORD_RATIO_MAX.
+Cette mise à jour ajoute une garde automatique pour éviter d'oublier le récap de version. Les tests vérifient maintenant que la version de pyproject.toml correspond à la ligne Version de datas/update_info.trinity, et que ce fichier contient bien un titre, un résumé et une liste de changements.
 
-Trinitty réactive aussi proprement le contexte de dialogue récent. Quand LAST_DIALOG_CONTEXT_ENABLED est activé, la dernière question sauvegardée est envoyée au LLM avec la nouvelle demande. Le modèle doit vérifier si les deux phrases sont liées et ignorer l'ancien contexte si ce n'est pas pertinent.
+L'objectif est simple: à chaque push avec changement de version, Trinitty doit aussi embarquer une note de mise à jour lisible par la commande "quoi de neuf avec cette mise à jour".
 
 Changements principaux:
-- remplacement de STT_BAD_WORD_COUNT_MAX par un calcul proportionnel basé sur STT_BAD_WORD_RATIO_MAX;
-- ajout de LAST_DIALOG_CONTEXT_ENABLED pour activer ou désactiver le contexte de la dernière question;
-- ajout de LAST_DIALOG_CONTEXT_TTL_SECONDS pour limiter la durée de ce contexte;
-- application du même contexte aux requêtes OpenAI normales, au streaming OpenAI et au fallback gpt4free;
-- configuration et README mis à jour pour expliquer les nouveaux réglages.
+- ajout d'un test statique qui compare la version du package avec datas/update_info.trinity;
+- vérification automatique de la présence des sections Titre, Résumé et Changements principaux;
+- bump de version vers 0.1.38;
+- conservation du fichier de récap dans le package PyPI.
 
 Commandes utiles:
 - trinitty --update-info

@@ -115,6 +115,27 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
         self.assertTrue((ROOT / "datas" / "update_info.trinity").exists())
         self.assertIn('"datas/update_info.trinity"', pyproject)
 
+    def test_update_info_matches_project_version_and_contains_recap(self):
+        pyproject = (ROOT / "pyproject.toml").read_text()
+        update_info = (ROOT / "datas" / "update_info.trinity").read_text()
+        pyproject_version = re.search(r'^version = "([^"]+)"', pyproject, flags=re.MULTILINE)
+        update_version = re.search(r"^Version:\s*(\S+)", update_info, flags=re.MULTILINE)
+
+        self.assertIsNotNone(pyproject_version)
+        self.assertIsNotNone(update_version)
+        self.assertEqual(pyproject_version.group(1), update_version.group(1))
+
+        for heading in ["Titre:", "Résumé:", "Changements principaux:"]:
+            self.assertIn(heading, update_info)
+
+        summary_match = re.search(
+            r"Résumé:\s*(.+?)\n\s*Changements principaux:",
+            update_info,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(summary_match)
+        self.assertGreaterEqual(len(summary_match.group(1).strip()), 80)
+
     def test_project_uses_trinitty_entrypoint_name(self):
         gitignore = (ROOT / ".gitignore").read_text()
         project_files = [
