@@ -6372,6 +6372,76 @@ def Detect_Trinitty_Help_Request(text):
 
 TRINITTY_UPDATE_CONFIRM_TEXT = "Est-ce que vous parlez de ma mise à jour ?"
 TRINITTY_UPDATE_MARKERS = {"trinitty", "trinity", "assistant", "programme"}
+TRINITTY_UPDATE_KEYWORD_PATTERN = (
+    r"(?:mise [aà] jour|mises [aà] jour|maj|changelog|derni[eè]re version|"
+    r"version r[eé]cente|nouveaut[eé]s?|quoi de neuf|quoi de nouveau)"
+)
+TRINITTY_UPDATE_GENERIC_SUBJECT_WORDS = {
+    "a",
+    "au",
+    "aux",
+    "avec",
+    "autour",
+    "cette",
+    "ce",
+    "cet",
+    "changelog",
+    "concernant",
+    "d",
+    "dans",
+    "de",
+    "des",
+    "derniere",
+    "dernieres",
+    "du",
+    "en",
+    "infos",
+    "info",
+    "information",
+    "informations",
+    "jour",
+    "l",
+    "la",
+    "le",
+    "les",
+    "ma",
+    "maj",
+    "mes",
+    "mise",
+    "mon",
+    "nouveau",
+    "nouveaux",
+    "nouvelle",
+    "nouvelles",
+    "nouveaute",
+    "nouveautes",
+    "note",
+    "notes",
+    "notre",
+    "nos",
+    "pour",
+    "prochaine",
+    "prochaines",
+    "recent",
+    "recente",
+    "recentes",
+    "recents",
+    "resume",
+    "recap",
+    "sa",
+    "ses",
+    "son",
+    "sujet",
+    "sur",
+    "ta",
+    "tes",
+    "ton",
+    "un",
+    "une",
+    "version",
+    "vos",
+    "votre",
+}
 
 
 def Trinitty_Update_Request_Has_Marker(text):
@@ -6383,20 +6453,84 @@ def Trinitty_Update_Request_Has_Marker(text):
     return bool(tokens.intersection(TRINITTY_UPDATE_MARKERS))
 
 
+def Normalize_Update_Subject_Text(text):
+    normalized = str(text or "").lower()
+    normalized = unicodedata.normalize("NFKD", normalized)
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = normalized.replace("'", " ")
+    normalized = re.sub(r"[^0-9a-z]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def Update_Subject_Is_External(candidate):
+    tokens = Normalize_Update_Subject_Text(candidate).split()
+    topic_tokens = [
+        token
+        for token in tokens
+        if token not in TRINITTY_UPDATE_GENERIC_SUBJECT_WORDS and token not in TRINITTY_UPDATE_MARKERS
+    ]
+    return bool(topic_tokens)
+
+
+def Trinitty_Update_Request_Has_External_Subject(text):
+    normalized = Normalize_Help_Command_Text(text)
+    if not normalized or Trinitty_Update_Request_Has_Marker(normalized):
+        return False
+
+    tail_patterns = [
+        r"\b(?:mise [aà] jour|mises [aà] jour|maj|changelog|derni[eè]re version|"
+        r"version r[eé]cente|nouveaut[eé]s?)\b(?P<tail>.*)$",
+        r"\b(?:quoi de neuf|quoi de nouveau)\b(?P<tail>.*)$",
+    ]
+    for pattern in tail_patterns:
+        for match in re.finditer(pattern, normalized):
+            if Update_Subject_Is_External(match.group("tail")):
+                return True
+
+    prefix_pattern = r"(?:sur|pour|concernant|dans|avec|a propos de|au sujet de)"
+    prefix_scope_pattern = r"\b%s\s+(?P<topic>.+?)\s+%s\b" % (
+        prefix_pattern,
+        TRINITTY_UPDATE_KEYWORD_PATTERN,
+    )
+    for match in re.finditer(prefix_scope_pattern, normalized):
+        if Update_Subject_Is_External(match.group("topic")):
+            return True
+
+    return False
+
+
+def Markerless_Trinitty_Update_Request_Is_Generic(text):
+    normalized = Normalize_Help_Command_Text(text)
+    if not normalized:
+        return False
+    if Trinitty_Update_Request_Has_External_Subject(normalized):
+        return False
+
+    markerless_update_patterns = [
+        r"^quoi de neuf (avec |sur |pour |dans )?(cette |la |ta |ton )?mise [aà] jour$",
+        r"^(cette |la |ta |ton )?mise [aà] jour.*quoi de neuf$",
+        r"\b(donne|donnes|donnez|affiche|affiches|affichez|liste|listes|listez|montre|montres|"
+        r"montrez|explique|expliques|expliquez|dis|dites|parle|parles|parlez|parler|presente|"
+        r"presentez|indique|indiquez)\b.*\b"
+        + TRINITTY_UPDATE_KEYWORD_PATTERN
+        + r"\b",
+        r"\b(informations?|infos?|notes?|changelog|recap|resume|details?)\b.*\b"
+        + TRINITTY_UPDATE_KEYWORD_PATTERN
+        + r"\b",
+        r"\b(derni[eè]re|nouvelle|r[eé]cente)\b.*\b(mise [aà] jour|version)\b",
+        r"\b(il y a|y a|existe)\b.*\bmise [aà] jour\b",
+        r"^%s$" % TRINITTY_UPDATE_KEYWORD_PATTERN,
+    ]
+    return any(re.search(pattern, normalized) for pattern in markerless_update_patterns)
+
+
 def Detect_Trinitty_Update_Request(text):
     normalized = Normalize_Help_Command_Text(text)
     if not normalized:
         return False
 
     if not Trinitty_Update_Request_Has_Marker(normalized):
-        markerless_update_patterns = [
-            r"^quoi de neuf (avec |sur |pour |dans )?(cette |la |ta |ton )?mise [aà] jour$",
-            r"^(cette |la |ta |ton )?mise [aà] jour.*quoi de neuf$",
-            r"^(donne|affiche|liste|montre|explique).*\b(informations?|infos?|notes?)\b.*\bmise [aà] jour$",
-            r"^(informations?|infos?|notes?)\b.*\bmise [aà] jour$",
-            r"^(donne|affiche|liste|montre|explique).*\b(changelog|derni[eè]re version)$",
-        ]
-        if not any(re.search(pattern, normalized) for pattern in markerless_update_patterns):
+        if not Markerless_Trinitty_Update_Request_Is_Generic(normalized):
             return False
 
     update_patterns = [
@@ -6597,6 +6731,11 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
         PRINT("\n-Trinitty:Commandes():Commande détecté.")
         goto = next(k for k in ambiguity)
 
+    if goto == "F_trinitty_update" and Trinitty_Update_Request_Has_External_Subject(decoded):
+        PRINT("\n-Trinitty:Commandes():F_trinitty_update ignored; external update subject detected.")
+        goto = None
+        ambiguity = False
+
     if CMD_DBG:
        if ambiguity:
            PRINT("\n-Trinitty:Commandes():len(ambiguity):%s"%len(ambiguity))
@@ -6662,6 +6801,10 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             return Trinitty_Help()
 
         if goto == "F_trinitty_update":
+            if not Trinitty_Update_Request_Has_Marker(decoded):
+                if not Ask_Trinitty_Update_Confirmation():
+                    PRINT("\n-Trinitty:Commandes():markerless update info command declined.")
+                    return False
             return Trinitty_Update_Info()
 
         if goto == "F_trinity_script":

@@ -1,9 +1,13 @@
-Version: 0.1.46
-Titre: Déclencheurs principaux et alternatifs compactés
+Version: 0.1.47
+Titre: Détection plus fine des demandes de mise à jour
 Date: 2026-06-27
 
 Résumé:
-Cette mise à jour ajoute un garde-fou pour les demandes ambiguës de mise à jour. Quand une phrase comme "quoi de neuf avec cette mise à jour" ne précise pas Trinitty, l'assistant demande maintenant si la question parle bien de sa propre mise à jour. Si la réponse est oui, la commande d'information Trinitty est lancée. Si la réponse est non ou reste incertaine, la phrase reprend le flux normal et peut être traitée comme une recherche ou une question classique.
+Cette mise à jour rend le garde-fou des demandes de mise à jour plus précis. Les formulations génériques comme "donne des informations sur la dernière mise à jour", "affiche le changelog" ou "quelle est la dernière version" sont maintenant reconnues comme ambiguës: Trinitty demande alors si la question parle bien d'elle.
+
+En revanche, si la phrase contient un sujet externe clair, comme "mise à jour de Windows", "mise à jour Minecraft", "changelog de Python" ou "infos sur Windows mise à jour", Trinitty ne lance pas sa commande interne. La demande repart dans le flux normal pour pouvoir être traitée comme une question ou une recherche sur ce sujet.
+
+Cette mise à jour conserve aussi le garde-fou précédent. Quand une phrase comme "quoi de neuf avec cette mise à jour" ne précise pas Trinitty, l'assistant demande si la question parle bien de sa propre mise à jour. Si la réponse est oui, la commande d'information Trinitty est lancée. Si la réponse est non ou reste incertaine, la phrase reprend le flux normal.
 
 Un nouveau déclencheur large a aussi été ajouté dans alt_cmd.trinity avec la syntaxe spéciale. Il couvre plusieurs formulations autour de "mise à jour", "dernière version", "changelog", "quoi de neuf" et "quoi de nouveau", tout en gardant un marqueur Trinitty, Trinity, assistant ou programme pour éviter de capturer directement les mises à jour d'autres sujets.
 
@@ -16,6 +20,9 @@ Elle corrige enfin deux comportements visibles. D'abord, l'ajout d'un nouveau d�
 Ensuite, l'affichage du texte de réponse est déclenché directement après la lecture audio et après Save_History. Cela évite que le retour en veille empêche l'affichage de la réponse complète.
 
 Changements principaux:
+- distinction entre demande générique de mise à jour et demande scoped sur un autre sujet;
+- les sujets explicites comme Windows, Minecraft ou Python ne déclenchent plus Trinitty_Update_Info;
+- le garde-fou s'applique aussi aux déclencheurs chargés depuis cmd.trinity, pas seulement au détecteur direct;
 - confirmation vocale pour les demandes génériques de mise à jour avant de lancer Trinitty_Update_Info;
 - les demandes explicites qui citent Trinitty, Trinity, l'assistant ou le programme ne demandent pas de confirmation;
 - un refus ou une réponse incertaine laisse la demande repartir dans le flux normal;

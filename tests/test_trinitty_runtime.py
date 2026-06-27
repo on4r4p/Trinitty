@@ -1050,6 +1050,30 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertTrue(trinitty.Trinitty_Update_Request_Has_Marker("mise à jour de Trinitty"))
         self.assertFalse(trinitty.Trinitty_Update_Request_Has_Marker("quoi de neuf avec cette mise à jour"))
 
+    def test_markerless_update_subject_detection_distinguishes_external_topics(self):
+        reset_command_state()
+        external_requests = [
+            "donne des informations sur la mise à jour de Windows",
+            "quoi de neuf dans la mise a jour minecraft",
+            "affiche le changelog de Python",
+            "donne la dernière version de Windows",
+            "infos sur windows mise a jour",
+        ]
+        generic_requests = [
+            "donne des informations sur la dernière mise à jour",
+            "affiche le changelog",
+            "quelle est la dernière version",
+            "est-ce qu'il y a une mise à jour",
+        ]
+
+        for request in external_requests:
+            self.assertTrue(trinitty.Trinitty_Update_Request_Has_External_Subject(request), request)
+            self.assertFalse(trinitty.Detect_Trinitty_Update_Request(request), request)
+
+        for request in generic_requests:
+            self.assertFalse(trinitty.Trinitty_Update_Request_Has_External_Subject(request), request)
+            self.assertTrue(trinitty.Detect_Trinitty_Update_Request(request), request)
+
     def test_markerless_update_command_asks_confirmation_before_running(self):
         reset_command_state()
         calls = []
@@ -1059,6 +1083,21 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Ask_Trinitty_Update_Confirmation = lambda: calls.append("confirm") or True
             trinitty.Trinitty_Update_Info = lambda play_audio=True: calls.append(("update", play_audio)) or True
             self.assertTrue(trinitty.Commandes("quoi de neuf avec cette mise à jour"))
+        finally:
+            trinitty.Ask_Trinitty_Update_Confirmation = original_confirm
+            trinitty.Trinitty_Update_Info = original_update
+
+        self.assertEqual(["confirm", ("update", True)], calls)
+
+    def test_generic_markerless_update_command_asks_confirmation(self):
+        reset_command_state()
+        calls = []
+        original_confirm = trinitty.Ask_Trinitty_Update_Confirmation
+        original_update = trinitty.Trinitty_Update_Info
+        try:
+            trinitty.Ask_Trinitty_Update_Confirmation = lambda: calls.append("confirm") or True
+            trinitty.Trinitty_Update_Info = lambda play_audio=True: calls.append(("update", play_audio)) or True
+            self.assertTrue(trinitty.Commandes("donne des informations sur la dernière mise à jour"))
         finally:
             trinitty.Ask_Trinitty_Update_Confirmation = original_confirm
             trinitty.Trinitty_Update_Info = original_update
@@ -1079,6 +1118,31 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Trinitty_Update_Info = original_update
 
         self.assertEqual(["confirm"], calls)
+
+    def test_scoped_update_request_does_not_ask_trinitty_confirmation(self):
+        reset_command_state()
+        original_confirm = trinitty.Ask_Trinitty_Update_Confirmation
+        original_update = trinitty.Trinitty_Update_Info
+        try:
+            trinitty.Ask_Trinitty_Update_Confirmation = lambda: self.fail("confirmation should not run")
+            trinitty.Trinitty_Update_Info = lambda play_audio=True: self.fail("update info should not run")
+            self.assertFalse(trinitty.Commandes("donne des informations sur la mise à jour de Windows"))
+        finally:
+            trinitty.Ask_Trinitty_Update_Confirmation = original_confirm
+            trinitty.Trinitty_Update_Info = original_update
+
+    def test_scoped_update_request_ignored_even_when_cmd_trigger_matches(self):
+        reset_command_state()
+        trinitty.Loaded_Trinitty_Update_Requests = ["quoi*neuf*mise a jour"]
+        original_confirm = trinitty.Ask_Trinitty_Update_Confirmation
+        original_update = trinitty.Trinitty_Update_Info
+        try:
+            trinitty.Ask_Trinitty_Update_Confirmation = lambda: self.fail("confirmation should not run")
+            trinitty.Trinitty_Update_Info = lambda play_audio=True: self.fail("update info should not run")
+            self.assertFalse(trinitty.Commandes("quoi de neuf dans la mise a jour windows"))
+        finally:
+            trinitty.Ask_Trinitty_Update_Confirmation = original_confirm
+            trinitty.Trinitty_Update_Info = original_update
 
     def test_update_confirmation_failure_clears_cancel_flags_for_fallback(self):
         reset_command_state()
