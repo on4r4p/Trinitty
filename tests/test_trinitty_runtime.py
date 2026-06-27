@@ -1775,6 +1775,30 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Special_Syntax("[rappelle{s-tu/ toi/}/souviens{-tu/ toi/}]", "test", 1),
         )
 
+    def test_special_syntax_keeps_raw_text_without_syntax(self):
+        reset_command_state()
+
+        self.assertEqual("ouvre*historique", trinitty.Special_Syntax("ouvre*historique", "test", 1))
+
+    def test_special_syntax_rejects_curly_syntax_without_brackets(self):
+        reset_command_state()
+
+        self.assertIsNone(trinitty.Special_Syntax("{a/b}", "test", 1))
+
+    def test_special_syntax_deduplicates_outputs(self):
+        reset_command_state()
+
+        self.assertEqual(["a", "b"], trinitty.Special_Syntax("[a/a/b]", "test", 1))
+
+    def test_special_syntax_handles_apostrophe_after_optional_group(self):
+        reset_command_state()
+
+        result = trinitty.Special_Syntax("[efface/supprime] [l']historique", "test", 1)
+
+        self.assertIn("efface l'historique", result)
+        self.assertIn("supprime l'historique", result)
+        self.assertFalse(any("],[" in value or "]" in value for value in result))
+
     def test_seeknreturn_respects_trigger_word_order(self):
         reset_command_state()
         triggers = ["ouvre*historique"]

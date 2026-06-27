@@ -1,17 +1,18 @@
-Version: 0.1.38
-Titre: Garde de publication pour le récap de mise à jour
-Date: 2026-06-26
+Version: 0.1.39
+Titre: Nettoyage du parseur de triggers
+Date: 2026-06-27
 
 Résumé:
-Cette mise à jour ajoute une garde automatique pour éviter d'oublier le récap de version. Les tests vérifient maintenant que la version de pyproject.toml correspond à la ligne Version de datas/update_info.trinity, et que ce fichier contient bien un titre, un résumé et une liste de changements.
+Cette mise à jour simplifie la syntaxe avancée des commandes de Trinitty. Le vieux parseur interne de Special_Syntax est remplacé par le parseur récursif, ce qui donne une seule logique pour les crochets, les accolades et les syntaxes imbriquées. Les phrases générées sont maintenant dédupliquées avant d'être chargées dans les listes de commandes, sans changer l'ordre de priorité.
 
-L'objectif est simple: à chaque push avec changement de version, Trinitty doit aussi embarquer une note de mise à jour lisible par la commande "quoi de neuf avec cette mise à jour".
+Elle corrige aussi l'enregistrement manuel des nouveaux déclencheurs: Add_Trigger écrit maintenant bien la fonction puis le déclencheur dans le CSV, au lieu d'inverser les deux colonnes.
 
 Changements principaux:
-- ajout d'un test statique qui compare la version du package avec datas/update_info.trinity;
-- vérification automatique de la présence des sections Titre, Résumé et Changements principaux;
-- bump de version vers 0.1.38;
-- conservation du fichier de récap dans le package PyPI.
+- migration de Special_Syntax vers Special_Syntax_Recursive pour les syntaxes [] et {};
+- conservation de la compatibilité pour les phrases sans syntaxe spéciale;
+- déduplication ordonnée des triggers générés;
+- correction des appels Write_csv dans Add_Trigger;
+- ajout de tests de régression sur le parseur et l'ordre des colonnes CSV.
 
 Commandes utiles:
 - trinitty --update-info

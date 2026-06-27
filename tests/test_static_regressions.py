@@ -154,6 +154,14 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
         self.assertNotIn(".venv-trinity/", gitignore)
         self.assertNotRegex(combined, r"\b(?:Trinity|trinity)\.py\b")
 
+    def test_add_trigger_writes_function_before_trigger(self):
+        self.assertIn("Write_csv(funcname, trigger, ALTFILE)", self.source)
+        self.assertIn("Write_csv(funcname, to_check, ALTFILE)", self.source)
+        self.assertIn("Write_csv(func_name_to_add, trigger_input, ALTFILE)", self.source)
+        self.assertNotIn("Write_csv(trigger, funcname, ALTFILE)", self.source)
+        self.assertNotIn("Write_csv(to_check, funcname, ALTFILE)", self.source)
+        self.assertNotIn("Write_csv(trigger_input, func_name_to_add, ALTFILE)", self.source)
+
     def test_installer_installs_packaging_tools_for_local_builds(self):
         installer = (ROOT / "install_dependencies.sh").read_text()
 

@@ -38,9 +38,6 @@ from queue import Empty, Queue
 from threading import Event, RLock, Thread, current_thread, main_thread
 from contextlib import contextmanager
 
-from itertools import product
-
-
 OPTIONAL_DEPENDENCY_ERRORS = {}
 
 
@@ -4005,6 +4002,17 @@ def Special_Syntax_Collapse_Spaces(value):
     return value
 
 
+def Unique_Preserve_Order(values):
+    seen = set()
+    unique_values = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique_values.append(value)
+    return unique_values
+
+
 def Special_Syntax_Recursive(txt):
     txt = str(txt)
 
@@ -4053,483 +4061,61 @@ def Special_Syntax_Recursive(txt):
 
 
 def Special_Syntax(txt, filepath=None, line=None):
+    txt = str(txt)
+    has_brackets = "[" in txt or "]" in txt
+    has_curlys = "{" in txt or "}" in txt
 
-    if Special_Syntax_Has_Nested_Brackets(txt):
-        try:
-            final_list = Special_Syntax_Recursive(txt)
-            if globals().get("SYNTAX_DBG", False):
-                PRINT("\n-Trinitty:Output Special Syntax for:\n%s\n\n%s" % (txt, final_list))
-            return final_list
-        except Exception as e:
-            print("-Trinitty Error:", str(e))
-            PRINT("\n-Trinitty:Special_Syntax():~PARSE~ERR~:txt:\n%s\n" % txt)
-            return None
+    if not has_brackets and not has_curlys:
+        return txt
 
+    lbrak_nbr = txt.count("[")
+    rbrak_nbr = txt.count("]")
+    lcurly_nbr = txt.count("{")
+    rcurly_nbr = txt.count("}")
 
-    def parse_cmd(cmd_txt):
-
-        #         def unnest(lst, append=False):
-        #             chunk = []
-        #             for x in lst:
-        #                 if isinstance(x, list):
-        #                     if chunk:
-        #                         yield chunk
-        #                     yield from unnest(x, True)
-        #                     chunk = []
-        #                 else:
-        #                     if append:
-        #                         chunk.append(x)
-        #                     else:
-        #                         yield [x]
-        #             if chunk:
-        #                 yield chunk
-
-        def to_list(str_lst):
-
-            def check_split(index):
-                coma = False
-                obracket = False
-                cbracket = False
-                quote = False
-
-                for c in str_lst[index:]:
-                    #            print("c:",c)
-                    if c == " ":
-                        pass
-                    elif c == ",":
-                        coma = True
-                    elif c == "[":
-                        obracket = True
-                    elif c == "]":
-                        cbracket = True
-                    elif c in ["'", '"']:
-                        quote = True
-                    else:
-                        return (coma and obracket) or (coma and quote) or cbracket
-                #        print("Rien")
-                return True
-
-            bucket = ""
-            to_split = False
-            #    listing = []
-            for e, char in enumerate(str_lst):
-                #        print("bucket:",bucket)
-                if to_split:
-                    if char in ["'", '"']:
-                        #                     print("bucket:",bucket)
-                        if check_split(e + 1):
-                            yield (None, bucket)
-                            # listing.append((None,bucket))
-                            bucket = ""
-                            to_split = False
-                        else:
-                            bucket += char
-                    else:
-                        bucket += char
-                else:
-                    if char == "[":
-                        #                 listing.append(("[", None))
-                        yield ("[", None)
-                    elif char == "]":
-                        #                 listing.append(("]", None))
-                        yield ("]", None)
-                    elif char in ["'", '"']:
-                        to_split = True
-                    else:
-                        pass
-
-        #    print("listing\:",listing)
-        #    return listing
-
-        def make_list(listing):
-            lst = []
-            for id, data in listing:
-                if id == "[":
-                    lst.append(make_list(listing))
-                elif id == "]":
-                    return lst
-                else:
-                    lst.append(data)
-            return lst[0]
-
-        def add_braks(cmd_txt, _lbraks, _rbraks):
-            def check_around(idx):
-                while True:
-                    if idx <= 0:
-                        return False
-                    if cmd_txt[idx] == " ":
-                        pass
-                    elif cmd_txt[idx] == "[":
-                        return False
-                    else:
-                        return cmd_txt[idx] == "]"
-                    idx -= 1
-                # return True
-
-            outside_lvl = []
-            bad_pos = []
-            skip = 0
-            start = None
-            end = None
-            for e, char in enumerate(cmd_txt):
-
-                if char == "[" and start is None:
-                    start = e
-                elif char == "[":
-                    skip += 1
-                elif char == "]":
-                    if skip > 0:
-                        skip -= 1
-                    else:
-                        end = e + 1
-                        outside_lvl.append((start, end))
-                        start = None
-                        end = None
-
-            for st, ed in outside_lvl:
-                for i in range(st, ed):
-                    bad_pos.append(i)
-
-            braks_txt = ""
-            opened = False
-            for e, char in enumerate(cmd_txt):
-                if e not in bad_pos:
-                    if opened:
-                        braks_txt += str(char)
-                    else:
-                        if check_around(e - 1):
-                            # print("cmd_txt[%s-1]:%s char:,[%s"%(e,cmd_txt[e-1],char))
-                            braks_txt += ",[" + str(char)
-                        else:
-                            # print("cmd_txt[%s-1]:%s char:[%s"%(e,cmd_txt[e-1],char))
-                            braks_txt += "[" + str(char)
-                        opened = True
-
-                else:
-                    if opened:
-                        braks_txt += "]," + str(char)
-                        opened = False
-                    else:
-                        braks_txt += str(char)
-
-            if opened:
-                braks_txt += "]"
-
-            return "[" + braks_txt + "]"
-
-        def add_quotes(fullbraks):
-
-            def check_around(idx, coma=False):
-                if coma:
-                    pos = idx - 1
-                    before = False
-                    after = False
-                    while True:
-                        #                     print("char before:",fullbraks[pos])
-                        if pos == 0:
-                            break
-                        if fullbraks[pos] == " ":
-                            pass
-                        elif fullbraks[pos] == "[":
-                            before = True
-                            break
-                        elif fullbraks[pos] == "]":
-                            before = False
-                            break
-                        else:
-                            before = True
-                            break
-                        pos -= 1
-
-                    for c in fullbraks[idx + 1 :]:
-                        #                     print("char after:",c)
-                        if c == " ":
-                            pass
-                        if c == "[":
-                            after = False
-                            break
-                        if c == "]":
-                            after = True
-                            break
-                        after = True
-                        break
-
-                    if before and not after:
-                        #                         print("before and not after")
-                        return '",'
-                    if after and not before:
-                        #                         print("after and not before")
-                        return ',"'
-                    if not before and not after:
-                        #                         print("not before and not after")
-                        return ","
-                    #                         print(" before and after")
-                    return '","'
-
-                for c in fullbraks[idx:]:
-                    return c not in ["[", "]"]
-                return False
-
-            fullquotes = ""
-            for e, char in enumerate(fullbraks):
-                #             print("char:",char)
-                if char == "[":
-                    if check_around(e + 1):
-                        fullquotes += '["'
-                    else:
-                        fullquotes += "["
-                elif char == "]":
-                    if check_around(e - 1):
-                        fullquotes += '"]'
-                    else:
-                        fullquotes += "]"
-                elif char == ",":
-
-                    fullquotes += check_around(e, True)
-                else:
-                    fullquotes += char
-            return fullquotes
-
-        def valid_lists(cmd_txt):
-            lbraks = [pos for pos, char in enumerate(cmd_txt) if char == "["]
-            rbraks = [pos for pos, char in enumerate(cmd_txt) if char == "]"]
-            lbrak_nbr = len(lbraks)
-            rbrak_nbr = len(rbraks)
-
-            lcurlys = [pos for pos, char in enumerate(cmd_txt) if char == "{"]
-            rcurlys = [pos for pos, char in enumerate(cmd_txt) if char == "}"]
-            lcurly_nbr = len(lcurlys)
-            rcurly_nbr = len(rcurlys)
-
-            if lbrak_nbr == 0 and rbrak_nbr == 0 and lcurly_nbr > 0 and rcurly_nbr > 0:
-                print(
-                    "\n-Fichier:%s ligne:%s Les symboles '{' et '}' s'utilisent conjointement avec les symboles '[' et ']' mais pas seuls."
-                    % (filepath, line)
-                )
-                return ("~PARSE~ERR~", None, None)
-            if lbrak_nbr == 0 and rbrak_nbr == 0:
-                return (False, None, None)
-            if lbrak_nbr != rbrak_nbr:
-                if lbrak_nbr > rbrak_nbr:
-                    print(
-                        "\n-Fichier:%s ligne:%s Il ya %s '[' et %s ']' seulement."
-                        % (filepath, line, lbrak_nbr, rbrak_nbr)
-                    )
-                else:
-                    print(
-                        "\n-Fichier:%s ligne:%s Il ya seulement %s '[' et %s ']'."
-                        % (filepath, line, lbrak_nbr, rbrak_nbr)
-                    )
-                return ("~PARSE~ERR~", None, None)
-
-            if lcurly_nbr != rcurly_nbr:
-                if lcurly_nbr > rcurly_nbr:
-                    print(
-                        "\n-Fichier:%s ligne:%s Il ya %s '{' et %s '}' seulement."
-                        % (filepath, line, lcurly_nbr, rcurly_nbr)
-                    )
-                else:
-                    print(
-                        "\n-Fichier:%s ligne:%s Il ya seulement %s '{' et %s '}'."
-                        % (filepath, line, lcurly_nbr, rcurly_nbr)
-                    )
-                return ("~PARSE~ERR~", None, None)
-
-            for o, c in zip(lbraks, rbraks, strict=False):
-                #             print("o:%s c:%s"%(o,c))
-                if o > c:
-                    print("\n-Fichier:%s ligne:%s Mauvaise syntax." % (filepath, line))
-                    return ("~PARSE~ERR~", None, None)
-            for o, c in zip(lcurlys, rcurlys, strict=False):
-                #             print("o:%s c:%s"%(o,c))
-                if o > c:
-                    print("\n-Fichier:%s ligne:%s Mauvaise syntax." % (filepath, line))
-                    return ("~PARSE~ERR~", None, None)
-
-            return (True, lbraks, rbraks)
-
-        cmd_txt = cmd_txt.replace("/", ",")
-
-        list_inside, lbraks, rbraks = valid_lists(cmd_txt)
-        if list_inside:
-            if list_inside == "~PARSE~ERR~":
-                return (list_inside, None)
-            try:
-                curlys = None
-                fullbraks = add_braks(cmd_txt, lbraks, rbraks)
-                if "{" in fullbraks and "}" in fullbraks:
-                    fullbraks, curlys = extract_curly(fullbraks)
-                    fullquotes = add_quotes(fullbraks)
-                #                  fullquotes = putback_curly(fullquotes,curlys)
-                else:
-                    fullquotes = add_quotes(fullbraks)
-
-                #                       PRINT("\nfullbraks:%s\n"%fullbraks)
-                #                       PRINT("\nfullquotes:%s\n"%fullquotes)
-
-                protolist = to_list(fullquotes)
-                actualist = make_list(protolist)
-
-                return (actualist, curlys)
-            except Exception as e:
-                print("-Trinitty Error:", str(e))
-                return ("~PARSE~ERR~", None)
+    if lbrak_nbr == 0 and rbrak_nbr == 0 and lcurly_nbr > 0 and rcurly_nbr > 0:
+        print(
+            "\n-Fichier:%s ligne:%s Les symboles '{' et '}' s'utilisent conjointement avec les symboles '[' et ']' mais pas seuls."
+            % (filepath, line)
+        )
+        PRINT("\n-Trinitty:Special_Syntax():~PARSE~ERR~:txt:\n%s\n" % txt)
+        return None
+    if lbrak_nbr != rbrak_nbr:
+        if lbrak_nbr > rbrak_nbr:
+            print(
+                "\n-Fichier:%s ligne:%s Il ya %s '[' et %s ']' seulement."
+                % (filepath, line, lbrak_nbr, rbrak_nbr)
+            )
         else:
-            return (False, None)
-
-    #    def putback_curly(str_to_check,dict):
-    #        for k,i in dict.items():
-    #            if k in str_to_check:
-    #                str_to_check = str_to_check.replace(k,i)
-    #        return(str_to_check)
-
-    def extract_curly(str_to_check):
-
-        #        PRINT("\nstr_to_check:\n",str_to_check)
-        def rnd_str(str_to_check, curly_dict):
-            while True:
-                characters = string.ascii_letters + string.digits
-                rnd = Non_Crypto_Token(5, characters)
-                if rnd not in curly_dict and rnd not in str_to_check:
-                    return rnd
-
-        curly_dict = {}
-        while True:
-            start = False
-            end = False
-
-            for n, c in enumerate(str_to_check):
-                if c == "{" and not start and not end:
-                    start = n
-                if c == "}" and start and not end:
-                    end = n + 1
-                if start and end:
-                    break
-
-            curly = str_to_check[start:end]
-            marker = rnd_str(str_to_check, curly_dict)
-
-            if "," in curly:
-                curly = curly.replace("{", "").replace("}", "").split(",")
-            else:
-                curly = curly.replace("{", "").replace("}", "")
-
-            curly_dict[marker] = curly
-            str_to_check = str_to_check[:start] + str(marker) + str_to_check[end:]
-
-            if "{" not in str_to_check and "}" not in str_to_check:
-                break
-
-        #    print("\nwithout curly:",str_to_check)
-        #    print("\ncurly_dict:")
-
-        #    for i,j in curly_dict.items():
-        #        print("%s type= %s:%s"%(i,type(i),j))
-        return (str_to_check, curly_dict)
-
-    def Unfold_cmd(cmd_lst, curlys):
-
-        unfolded = []
-
-        for lst in cmd_lst:
-            tmp_lst = []
-
-            for item in lst:
-                skip = False
-
-                for k, i in curlys.items():
-                    if k in item:
-
-                        skip = True
-                        if isinstance(i, list):
-                            for j in i:
-                                tmp_lst.append(item.replace(k, j))
-                        else:
-                            tmp_lst.append(item.replace(k, i))
-
-                        break
-                if not skip:
-                    tmp_lst.append(item)
-
-            unfolded.append(tmp_lst)
-
-        for lst in unfolded:
-            for item in lst:
-                for k in curlys:
-                    if k in item:
-                        return Unfold_cmd(unfolded, curlys)
-
-        return unfolded
-
-    def join_and_replace(tojoin):
-        joined = "".join(tojoin)
-        if "  " in joined:
-            replaced = joined
-            while True:
-                replaced = replaced.replace("  ", " ")
-                if "  " not in replaced:
-                    joined_and_replaced = replaced
-                    break
-        #                 else:
-        #                      print("replaced:",replaced)
-        #                      input("")
+            print(
+                "\n-Fichier:%s ligne:%s Il ya seulement %s '[' et %s ']'."
+                % (filepath, line, lbrak_nbr, rbrak_nbr)
+            )
+        PRINT("\n-Trinitty:Special_Syntax():~PARSE~ERR~:txt:\n%s\n" % txt)
+        return None
+    if lcurly_nbr != rcurly_nbr:
+        if lcurly_nbr > rcurly_nbr:
+            print(
+                "\n-Fichier:%s ligne:%s Il ya %s '{' et %s '}' seulement."
+                % (filepath, line, lcurly_nbr, rcurly_nbr)
+            )
         else:
-            joined_and_replaced = joined
+            print(
+                "\n-Fichier:%s ligne:%s Il ya seulement %s '{' et %s '}'."
+                % (filepath, line, lcurly_nbr, rcurly_nbr)
+            )
+        PRINT("\n-Trinitty:Special_Syntax():~PARSE~ERR~:txt:\n%s\n" % txt)
+        return None
 
-        return joined_and_replaced
-
-    parsed_cmd, curlys = parse_cmd(txt)
-
-    if parsed_cmd:
-        final_list = []
-        if parsed_cmd == "~PARSE~ERR~":
-            PRINT("\n-Trinitty:Special_Syntax():~PARSE~ERR~:txt:\n%s\n" % txt)
-            return None
-        #         PRINT("\ntxt:\n%s\n"%txt)
-        #         PRINT("\nparsed_cmd:\n%s\n"%parsed_cmd)
-        if curlys:
-            #             PRINT("\n-Trinitty:curlys is full:")
-            #             for i,j in curlys.items():
-            #                 PRINT("%s:%s"%(i,j))
-            unfolded = Unfold_cmd(parsed_cmd, curlys)
-            prod = product(*unfolded)
-            final_list = [join_and_replace(i) for i in prod]
-            if globals().get("SYNTAX_DBG", False):
-                PRINT("\n-Trinitty:Output Special Syntax for:\n%s\n\n%s" % (txt, final_list))
-            return final_list
-        prod = product(*parsed_cmd)
-        final_list = [join_and_replace(i) for i in prod]
+    try:
+        final_list = Unique_Preserve_Order(Special_Syntax_Recursive(txt))
         if globals().get("SYNTAX_DBG", False):
             PRINT("\n-Trinitty:Output Special Syntax for:\n%s\n\n%s" % (txt, final_list))
         return final_list
-    #        PRINT("no advanced syntax:\n",txt)
-    return txt
-
-    ##TODO sublvl etc ..
-    # for n,p in enumerate(parsed_cmd):
-    #   print("sending %s %s"%(n,p))
-    #   markers = final_parse(p,pos_lst=n)
-
-    # marker = final_parse(parsed_cmd)
-    # print("\n\nfinal marker:")
-    # for i,j in markers.items():print("%s:%s"%(i,j))
-
-    # print("\nparsed_cmd:\n")
-    # for n,i in enumerate(parsed_cmd):
-    #    print("%s =  %s"%(n,i))
-    # to_prod,markers = is_inner_lst(parsed_cmd)
-    # sys.exit()
-
-    # if markers:
-    #    print("\nmarkers is full\n")
-    #    prod = product(*parsed_cmd)
-    #    for i in prod:
-    #       print(i)
-    # else:
-    #    print("\n\nno markers final:\n")
-    #    prod = product(*parsed_cmd)
-    #    for i in prod:
-    #       print(i)
+    except Exception as e:
+        print("-Trinitty Error:", str(e))
+        PRINT("\n-Trinitty:Special_Syntax():~PARSE~ERR~:txt:\n%s\n" % txt)
+        return None
 
 
 def Load_Csv():
@@ -5776,9 +5362,9 @@ def Add_Trigger(trigger_input=None, func_name_to_add=None, specific_trigger=None
                     if rusure == "oui":
                         if isinstance(to_check,list):
                              for trigger in to_check:
-                                 Write_csv(trigger, funcname, ALTFILE)
+                                 Write_csv(funcname, trigger, ALTFILE)
                         else:
-                                Write_csv(to_check, funcname, ALTFILE)
+                                Write_csv(funcname, to_check, ALTFILE)
                         return True
                     if rusure == "non":
                         return False
@@ -5894,7 +5480,7 @@ def Add_Trigger(trigger_input=None, func_name_to_add=None, specific_trigger=None
                     return func_name_to_add
             else:
                 Play_Audio_File("%s/local_sounds/cmd/sorry.wav" % SCRIPT_PATH)
-                Write_csv(trigger_input, func_name_to_add, ALTFILE)
+                Write_csv(func_name_to_add, trigger_input, ALTFILE)
                 return func_name_to_add
 
 
