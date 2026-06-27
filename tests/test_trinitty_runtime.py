@@ -122,6 +122,7 @@ def reset_command_state():
     trinitty.GPT4FREE_RUNTIME_ERROR = ""
     trinitty.GPT4FREE_SUBPROCESS_ENABLED = True
     trinitty.SCRIPT_PATH = str(ROOT)
+    trinitty.BOOT_SOUND_PLAYED = False
     trinitty.LAST_DIALOG = []
     trinitty.unidecode = lambda value: value
 
@@ -2381,6 +2382,38 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertIn(("play", str(ROOT / "local_sounds" / "noinput" / "1.wav")), calls)
         self.assertFalse(trinitty.No_Input.empty())
+
+    def test_prompt_starts_wait_audio_after_valid_interpretor_input(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.SCRIPT_PATH = str(ROOT)
+        calls = []
+        original_input = builtins.input
+        original_play = trinitty.Play_Audio_File
+        original_start_wait = trinitty.Start_Wait_Response_Audio
+        original_stop_wait = trinitty.Stop_Wait_Response_Audio
+        original_commandes = trinitty.Commandes
+        original_to_gpt = trinitty.To_Gpt
+        builtins.input = lambda _prompt=None: "quelle heure est-il"
+        trinitty.Play_Audio_File = lambda path: calls.append(("play", Path(path).name)) or 0
+        trinitty.Start_Wait_Response_Audio = lambda: calls.append(("wait-start",)) or "wait-handle"
+        trinitty.Stop_Wait_Response_Audio = lambda handle: calls.append(("wait-stop", handle))
+        trinitty.Commandes = lambda *args, **kwargs: calls.append(("cmd", args[0])) or False
+        trinitty.To_Gpt = lambda text, wait_audio=None: calls.append(("to-gpt", text, wait_audio)) or "gpt"
+        try:
+            self.assertEqual("gpt", trinitty.Prompt())
+        finally:
+            builtins.input = original_input
+            trinitty.Play_Audio_File = original_play
+            trinitty.Start_Wait_Response_Audio = original_start_wait
+            trinitty.Stop_Wait_Response_Audio = original_stop_wait
+            trinitty.Commandes = original_commandes
+            trinitty.To_Gpt = original_to_gpt
+
+        self.assertIn(("play", "2.wav"), calls)
+        self.assertLess(calls.index(("wait-start",)), calls.index(("cmd", "quelle heure est-il")))
+        self.assertIn(("to-gpt", "quelle heure est-il", "wait-handle"), calls)
+        self.assertNotIn(("wait-stop", "wait-handle"), calls)
 
     def test_interpretor_input_timeout_uses_wav_duration_plus_margin(self):
         reset_command_state()
@@ -5789,6 +5822,31 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.datetime = original_datetime
             trinitty.Play_Audio_File = original_play
             trinitty.sys.exit = original_exit
+
+    def test_boot_sound_after_loading_is_one_shot(self):
+        reset_command_state()
+        calls = []
+        original_play = trinitty.Play_Audio_File
+        try:
+            trinitty.Play_Audio_File = lambda path: calls.append(path) or 0
+
+            self.assertTrue(trinitty.Play_Boot_Sound_After_Loading())
+            self.assertFalse(trinitty.Play_Boot_Sound_After_Loading())
+
+            self.assertEqual([str(ROOT) + "/local_sounds/boot/psx.wav"], calls)
+            self.assertTrue(trinitty.BOOT_SOUND_PLAYED)
+        finally:
+            trinitty.Play_Audio_File = original_play
+
+    def test_main_boot_sound_is_after_loading_before_wake_loop(self):
+        source = (ROOT / "trinitty.py").read_text(encoding="utf-8")
+        main_block = source.split('if __name__ == "__main__":', 1)[1]
+        load_pos = main_block.index("Load_Csv()")
+        boot_pos = main_block.index("Play_Boot_Sound_After_Loading()")
+        trinitty_pos = main_block.index("Trinitty()")
+
+        self.assertLess(load_pos, boot_pos)
+        self.assertLess(boot_pos, trinitty_pos)
 
     def test_getconf_loads_local_override_after_base_config(self):
         with tempfile.TemporaryDirectory() as tmp:

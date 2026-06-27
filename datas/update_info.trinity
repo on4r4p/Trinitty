@@ -1,8 +1,18 @@
-Version: 0.1.53
-Titre: Timeout clavier dynamique, fermeture vocale et affichage de réponse clarifié
+Version: 0.1.54
+Titre: Son de boot avant wake word et attente en mode interpréteur
 Date: 2026-06-27
 
 Résumé:
+Cette mise à jour déplace le son de boot principal au dernier moment utile: après le chargement de la configuration, des clés, des commandes et des vérifications optionnelles, mais juste avant l'entrée dans la boucle normale de Trinitty.
+
+Concrètement, local_sounds/boot/psx.wav n'est plus joué avant les logs de runtime et CHECK_UPDATE. Il est maintenant lancé seulement dans le chemin normal, immédiatement avant Trinitty(), donc avant que le micro soit ouvert pour écouter le wake word.
+
+Un garde-fou one-shot empêche aussi de rejouer ce son par erreur pendant les retours internes vers la veille.
+
+En mode interpréteur, après une saisie valide de plus de deux caractères, Trinitty lance maintenant le son d'attente avant de chercher une commande ou de partir vers OpenAI. Cela donne un retour vocal immédiat du type "ok, j'effectue votre recherche" au lieu de rester silencieuse pendant le traitement.
+
+Si la phrase n'est pas une commande, ce même son d'attente est transmis au flux GPT au lieu d'en lancer un second. Si la phrase est vide ou trop courte, aucun son d'attente n'est joué.
+
 Cette mise à jour adapte le délai du mode clavier à la durée du ou des fichiers WAV joués juste avant la saisie. INTERPRETOR_INPUT_TIMEOUT reste le fallback si la durée audio est inconnue, et 0 désactive toujours le timeout. Quand la durée du WAV est connue, Trinitty utilise cette durée plus une marge configurable, avec une attente minimale configurable.
 
 Deux nouvelles variables de configuration accompagnent ce comportement:
@@ -53,6 +63,10 @@ Elle corrige enfin deux comportements visibles. D'abord, l'ajout d'un nouveau d�
 Ensuite, l'affichage du texte de réponse est déclenché directement après la lecture audio et après Save_History. Cela évite que le retour en veille empêche l'affichage de la réponse complète.
 
 Changements principaux:
+- son de boot principal joué après les chargements, juste avant la première écoute wake word;
+- garde-fou one-shot pour éviter de rejouer local_sounds/boot/psx.wav pendant les retours internes;
+- son d'attente lancé en mode interpréteur dès qu'une saisie valide est terminée;
+- le handle d'attente est réutilisé par To_Gpt pour éviter un double son;
 - "aide-moi" dans une demande générale ne déclenche plus l'aide de Trinitty;
 - les récits du type "j'ai essayé sur internet" ne déclenchent plus F_search_web;
 - interruption Vosk restaurée pour les voix moins fortes mais clairement plus proches que le haut-parleur;

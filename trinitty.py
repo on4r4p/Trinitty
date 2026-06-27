@@ -7965,10 +7965,20 @@ def Prompt(allowed_functions=None,from_function=None):
     ).strip()
     if len(str(user_input)) > 2:
 
+        prompt_wait_audio = None
+        if not from_function:
+            prompt_wait_audio = Start_Wait_Response_Audio()
+
+        def stop_prompt_wait_audio():
+            nonlocal prompt_wait_audio
+            Stop_Wait_Response_Audio(prompt_wait_audio)
+            prompt_wait_audio = None
+
         cmd = Commandes(user_input,allowed_functions=allowed_functions,from_function=from_function)
         if not cmd and not from_function:
             PRINT("\n-Trinitty:Prompt():pas de cmd")
-            return To_Gpt(str(user_input))
+            return To_Gpt(str(user_input), wait_audio=prompt_wait_audio)
+        stop_prompt_wait_audio()
         if not cmd and from_function:
             PRINT("\n-Trinitty:Prompt():pas de cmd mais from_function:%s"%from_function)
             if from_function == "Results_Hub":
@@ -9475,6 +9485,20 @@ def Quit(from_function=None):
         PRINT("\n-Trinitty:Quit():local_sounds/boot/xspx.wav")
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/boot/xspx.wav")
         sys.exit(0)
+
+
+def Play_Boot_Sound_After_Loading():
+    global BOOT_SOUND_PLAYED
+
+    if globals().get("BOOT_SOUND_PLAYED", False):
+        return False
+
+    boot_sound = SCRIPT_PATH + "/local_sounds/boot/psx.wav"
+    PRINT("\n-Trinitty:Boot sound après chargement:%s" % boot_sound)
+    Play_Audio_File(boot_sound)
+    BOOT_SOUND_PLAYED = True
+    return True
+
 
 def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=None):
     PRINT("\n-Trinitty:Dans la fonction Standing_By")
@@ -12376,6 +12400,7 @@ if __name__ == "__main__":
     SEARCH_DBG = False
     XCB_ERROR_FIX = False
     SAVED_ANSWER = SCRIPT_PATH + "/local_sounds/saved_answer/"
+    BOOT_SOUND_PLAYED = False
 
     user_data_root = Initialize_User_Data()
     if Auto_Dependency_Installer_Enabled():
@@ -12450,7 +12475,6 @@ if __name__ == "__main__":
     if XCB_ERROR_FIX:
         Xcb_Fix("unset")
 
-    Play_Audio_File(SCRIPT_PATH + "/local_sounds/boot/psx.wav")
     signal.signal(signal.SIGINT, signal_ctrlc)
     PRINT("\n-Trinitty:Python Version:%s"% sys.version)
     PRINT("-Trinitty:CHECK_UPDATE:%s" % CHECK_UPDATE)
@@ -12499,5 +12523,6 @@ if __name__ == "__main__":
         Dbg_Input()
     else:
 #####
+        Play_Boot_Sound_After_Loading()
         Trinitty()
 #####
