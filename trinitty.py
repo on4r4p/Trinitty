@@ -8239,8 +8239,6 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
 
     PRINT("\n-Trinitty:len(txtinput):", len(txtinput))
 
-    print("\n-Trinitty:\n\n%s\n\n" % txtinput)
-
     parsed_response = parse_response(str(txtinput))
     PRINT("\n-After Parse:\n%s\n\n" % parsed_response)
 
@@ -8392,12 +8390,14 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
         if Err_Concatenation:
             return Play_Response(stay_awake=stayawake, save_history=savehistory, answer_txt=txtinput)
 
-        return Play_Response(
+        play_result = Play_Response(
             audio_response=final_wav,
             stay_awake=stayawake,
             save_history=savehistory,
             answer_txt=txtinput,
         )
+        Display_Response_Text(txtinput)
+        return play_result
 
 
     Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_audio_sox.wav")
@@ -8420,6 +8420,10 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
 
 
 #    return(Play_Response(audio_response=final_wav,stay_awake=stayawake,save_history=savehistory,answer_txt=txtinput))
+
+
+def Display_Response_Text(answer_txt):
+    print("\n-Trinitty:\n\n%s\n\n" % answer_txt)
 
 
 def Concatenate_Wav_Files(wav_files, output_path):
@@ -8481,6 +8485,8 @@ def Text_To_Speech_Streamed(segment_iter, stayawake=False, savehistory=True, bef
     answer_txt = " ".join(segments).strip()
     final_wav = Runtime_Tmp_Path("current_answer.wav")
     wav_ready = Concatenate_Wav_Files(wav_files, final_wav)
+    if wav_ready:
+        Display_Response_Text(answer_txt)
 
     if savehistory:
         if wav_ready:

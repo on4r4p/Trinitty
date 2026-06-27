@@ -587,6 +587,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 trinitty.Synthesize_Text_To_Wav,
                 trinitty.Play_Audio_File_With_Interrupt,
                 trinitty.Concatenate_Wav_Files,
+                trinitty.Display_Response_Text,
                 trinitty.Save_History,
                 trinitty.Go_Back_To_Sleep,
                 getattr(trinitty, "DLANG_KEY", None),
@@ -600,7 +601,12 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
             trinitty.Synthesize_Text_To_Wav = fake_synthesize
             trinitty.Play_Audio_File_With_Interrupt = lambda path: calls.append(("play", Path(path).name)) or 0
-            trinitty.Concatenate_Wav_Files = lambda _wav_files, output_path: Path(output_path).write_bytes(b"wav") or True
+            trinitty.Concatenate_Wav_Files = (
+                lambda _wav_files, output_path: calls.append(("concat", Path(output_path).name))
+                or Path(output_path).write_bytes(b"wav")
+                or True
+            )
+            trinitty.Display_Response_Text = lambda answer: calls.append(("display", answer))
             trinitty.Save_History = lambda answer, no_audio=False: calls.append(("history", answer, no_audio))
             trinitty.Go_Back_To_Sleep = lambda go_trinitty=True: calls.append(("sleep", go_trinitty)) or "sleep"
             trinitty.DLANG_KEY = False
@@ -615,6 +621,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     trinitty.Synthesize_Text_To_Wav,
                     trinitty.Play_Audio_File_With_Interrupt,
                     trinitty.Concatenate_Wav_Files,
+                    trinitty.Display_Response_Text,
                     trinitty.Save_History,
                     trinitty.Go_Back_To_Sleep,
                     trinitty.DLANG_KEY,
@@ -629,6 +636,8 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 ("play", "stream_answer0000.wav"),
                 ("tts", "Deuxieme phrase."),
                 ("play", "stream_answer0001.wav"),
+                ("concat", "current_answer.wav"),
+                ("display", "Premiere phrase. Deuxieme phrase."),
                 ("history", "Premiere phrase. Deuxieme phrase.", False),
                 ("sleep", True),
             ],
@@ -3631,6 +3640,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 trinitty.sox,
                 trinitty.time.sleep,
                 trinitty.Play_Response,
+                trinitty.Display_Response_Text,
                 getattr(trinitty, "DLANG_KEY", None),
                 getattr(trinitty, "GOOGLE_TRANSLATE", None),
             )
@@ -3638,6 +3648,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.sox = fake_sox
             trinitty.time.sleep = lambda _seconds: None
             trinitty.Play_Response = lambda **kwargs: calls.append(("play_response", kwargs)) or "played"
+            trinitty.Display_Response_Text = lambda answer: calls.append(("display", answer))
             trinitty.DLANG_KEY = False
             trinitty.GOOGLE_TRANSLATE = False
             try:
@@ -3648,6 +3659,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     trinitty.sox,
                     trinitty.time.sleep,
                     trinitty.Play_Response,
+                    trinitty.Display_Response_Text,
                     trinitty.DLANG_KEY,
                     trinitty.GOOGLE_TRANSLATE,
                 ) = originals
@@ -3655,6 +3667,8 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertTrue(tmp_dir.exists())
             self.assertFalse((tmp_dir / "answer0000.wav").exists())
             self.assertTrue((tmp_dir / "current_answer.wav").exists())
+            self.assertEqual("play_response", calls[-2][0])
+            self.assertEqual(("display", "bonjour"), calls[-1])
 
     def test_text_to_speech_has_no_artificial_segment_sleep_on_success(self):
         reset_command_state()

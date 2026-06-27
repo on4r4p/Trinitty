@@ -1,18 +1,18 @@
-Version: 0.1.39
-Titre: Nettoyage du parseur de triggers
+Version: 0.1.40
+Titre: Affichage de la réponse après lecture audio
 Date: 2026-06-27
 
 Résumé:
-Cette mise à jour simplifie la syntaxe avancée des commandes de Trinitty. Le vieux parseur interne de Special_Syntax est remplacé par le parseur récursif, ce qui donne une seule logique pour les crochets, les accolades et les syntaxes imbriquées. Les phrases générées sont maintenant dédupliquées avant d'être chargées dans les listes de commandes, sans changer l'ordre de priorité.
+Cette mise à jour ajuste le moment où Trinitty affiche le texte d'une réponse vocale. Le texte complet n'est plus affiché avant la génération audio ni avant la lecture en mode classique, et le mode streaming affiche la réponse complète seulement une fois les segments lus et le WAV final concaténé.
 
-Elle corrige aussi l'enregistrement manuel des nouveaux déclencheurs: Add_Trigger écrit maintenant bien la fonction puis le déclencheur dans le CSV, au lieu d'inverser les deux colonnes.
+Le résultat est plus cohérent avec ce que l'utilisateur entend: Trinitty parle d'abord, puis affiche le texte complet correspondant au WAV sauvegardé pour l'historique et pour la fonction répète.
 
 Changements principaux:
-- migration de Special_Syntax vers Special_Syntax_Recursive pour les syntaxes [] et {};
-- conservation de la compatibilité pour les phrases sans syntaxe spéciale;
-- déduplication ordonnée des triggers générés;
-- correction des appels Write_csv dans Add_Trigger;
-- ajout de tests de régression sur le parseur et l'ordre des colonnes CSV.
+- ajout d'un affichage centralisé de la réponse texte;
+- affichage après Play_Response en mode classique;
+- affichage après lecture des segments et concaténation finale en mode streaming;
+- conservation de l'ordre lecture, concaténation streaming, affichage, historique;
+- ajout de tests de régression sur l'ordre d'affichage.
 
 Commandes utiles:
 - trinitty --update-info
