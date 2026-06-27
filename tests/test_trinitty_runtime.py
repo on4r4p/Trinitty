@@ -1058,12 +1058,17 @@ class TrinittyRuntimeTests(unittest.TestCase):
             "affiche le changelog de Python",
             "donne la dernière version de Windows",
             "infos sur windows mise a jour",
+            "tu peux me donner les infos sur la mise à jour de Windows s'il te plaît",
         ]
         generic_requests = [
             "donne des informations sur la dernière mise à jour",
             "affiche le changelog",
             "quelle est la dernière version",
             "est-ce qu'il y a une mise à jour",
+            "tu peux me donner les infos sur ta mise à jour s'il te plaît",
+            "qu est ce qui a changé dans ta mise à jour",
+            "qu apporte la mise à jour",
+            "les modifs de la maj",
         ]
 
         for request in external_requests:
@@ -1098,6 +1103,21 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Ask_Trinitty_Update_Confirmation = lambda: calls.append("confirm") or True
             trinitty.Trinitty_Update_Info = lambda play_audio=True: calls.append(("update", play_audio)) or True
             self.assertTrue(trinitty.Commandes("donne des informations sur la dernière mise à jour"))
+        finally:
+            trinitty.Ask_Trinitty_Update_Confirmation = original_confirm
+            trinitty.Trinitty_Update_Info = original_update
+
+        self.assertEqual(["confirm", ("update", True)], calls)
+
+    def test_polite_markerless_update_info_request_asks_confirmation(self):
+        reset_command_state()
+        calls = []
+        original_confirm = trinitty.Ask_Trinitty_Update_Confirmation
+        original_update = trinitty.Trinitty_Update_Info
+        try:
+            trinitty.Ask_Trinitty_Update_Confirmation = lambda: calls.append("confirm") or True
+            trinitty.Trinitty_Update_Info = lambda play_audio=True: calls.append(("update", play_audio)) or True
+            self.assertTrue(trinitty.Commandes("Tu peux me donner les infos sur ta mise à jour s'il te plaît."))
         finally:
             trinitty.Ask_Trinitty_Update_Confirmation = original_confirm
             trinitty.Trinitty_Update_Info = original_update
@@ -2028,6 +2048,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertLessEqual(len(rows), 60)
         self.assertLessEqual(len(generated_by_function["F_search_web"]), 500)
+        self.assertLessEqual(len(generated_by_function["F_trinitty_update"]), 7000)
 
         expected_phrases = {
             "F_trinity_name": ["comment*tu*t'appeles", "c'est quoi*votre *nom"],
@@ -2039,7 +2060,17 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 "quelles*sont*tes possibilite",
                 "qu*peut*faire*avec vous",
             ],
-            "F_trinitty_update": ["info*mise a jour*trinitty", "quoi*neuf*mise à jour", "changelog*trinitty"],
+            "F_trinitty_update": [
+                "info*mise a jour*trinitty",
+                "donner*infos*mise a jour",
+                "donnez*informations*mise à jour",
+                "informer*recap*dernière version",
+                "ce qui*a changé*mise a jour",
+                "qu'apporte*mise à jour",
+                "modifs*maj",
+                "quoi*neuf*mise à jour",
+                "changelog*trinitty",
+            ],
             "F_prompt": ["le prompt", "que*je t'ecrive", "je*vous*l'ecrire", "interpreteur"],
             "F_trinity_script": ["affiche ton code source", "liste*fonctions*liées"],
             "F_rnd": ["choix*au hasard*entre", "choisissez*ou"],

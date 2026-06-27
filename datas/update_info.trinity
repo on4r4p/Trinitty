@@ -1,9 +1,13 @@
-Version: 0.1.47
-Titre: Détection plus fine des demandes de mise à jour
+Version: 0.1.49
+Titre: Variantes vocales de mise à jour élargies
 Date: 2026-06-27
 
 Résumé:
-Cette mise à jour rend le garde-fou des demandes de mise à jour plus précis. Les formulations génériques comme "donne des informations sur la dernière mise à jour", "affiche le changelog" ou "quelle est la dernière version" sont maintenant reconnues comme ambiguës: Trinitty demande alors si la question parle bien d'elle.
+Cette mise à jour élargit les formulations vocales reconnues pour demander les informations de mise à jour. Une phrase comme "Tu peux me donner les infos sur ta mise à jour s'il te plaît" est maintenant couverte par cmd.trinity avec la syntaxe spéciale, sans devoir citer explicitement Trinitty.
+
+La couverture accepte davantage de verbes et de noms courants: donner, afficher, lister, montrer, expliquer, parler, raconter, informer, détailler, résumer, ainsi que info, infos, informations, notes, changelog, récapitulatif et nouveautés. Elle couvre aussi les demandes du type "ce qui change", "qu'apporte la mise à jour", "changements", "modifs", "corrections" et "améliorations".
+
+Elle conserve la détection plus fine du garde-fou des demandes de mise à jour. Les formulations génériques comme "donne des informations sur la dernière mise à jour", "affiche le changelog" ou "quelle est la dernière version" sont reconnues comme ambiguës: Trinitty demande alors si la question parle bien d'elle.
 
 En revanche, si la phrase contient un sujet externe clair, comme "mise à jour de Windows", "mise à jour Minecraft", "changelog de Python" ou "infos sur Windows mise à jour", Trinitty ne lance pas sa commande interne. La demande repart dans le flux normal pour pouvoir être traitée comme une question ou une recherche sur ce sujet.
 
@@ -20,6 +24,9 @@ Elle corrige enfin deux comportements visibles. D'abord, l'ajout d'un nouveau d�
 Ensuite, l'affichage du texte de réponse est déclenché directement après la lecture audio et après Save_History. Cela évite que le retour en veille empêche l'affichage de la réponse complète.
 
 Changements principaux:
+- cmd.trinity couvre davantage de variantes de demande d'information sur la mise à jour;
+- cmd.trinity couvre aussi les formulations "ce qui change", "qu'apporte", "modifs", "corrections" et "améliorations";
+- la politesse finale comme "s'il te plaît" n'est plus prise pour un sujet externe;
 - distinction entre demande générique de mise à jour et demande scoped sur un autre sujet;
 - les sujets explicites comme Windows, Minecraft ou Python ne déclenchent plus Trinitty_Update_Info;
 - le garde-fou s'applique aussi aux déclencheurs chargés depuis cmd.trinity, pas seulement au détecteur direct;

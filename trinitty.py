@@ -6399,13 +6399,16 @@ TRINITTY_UPDATE_GENERIC_SUBJECT_WORDS = {
     "info",
     "information",
     "informations",
+    "il",
     "jour",
     "l",
     "la",
     "le",
     "les",
+    "m",
     "ma",
     "maj",
+    "me",
     "mes",
     "mise",
     "mon",
@@ -6419,6 +6422,8 @@ TRINITTY_UPDATE_GENERIC_SUBJECT_WORDS = {
     "notes",
     "notre",
     "nos",
+    "plait",
+    "please",
     "pour",
     "prochaine",
     "prochaines",
@@ -6433,8 +6438,13 @@ TRINITTY_UPDATE_GENERIC_SUBJECT_WORDS = {
     "son",
     "sujet",
     "sur",
+    "s",
+    "stp",
+    "svp",
     "ta",
+    "te",
     "tes",
+    "toi",
     "ton",
     "un",
     "une",
@@ -6509,14 +6519,22 @@ def Markerless_Trinitty_Update_Request_Is_Generic(text):
     markerless_update_patterns = [
         r"^quoi de neuf (avec |sur |pour |dans )?(cette |la |ta |ton )?mise [aà] jour$",
         r"^(cette |la |ta |ton )?mise [aà] jour.*quoi de neuf$",
-        r"\b(donne|donnes|donnez|affiche|affiches|affichez|liste|listes|listez|montre|montres|"
-        r"montrez|explique|expliques|expliquez|dis|dites|parle|parles|parlez|parler|presente|"
-        r"presentez|indique|indiquez)\b.*\b"
+        r"\b(donne|donnes|donnez|donner|affiche|affiches|affichez|afficher|liste|listes|listez|lister|"
+        r"montre|montres|montrez|montrer|explique|expliques|expliquez|expliquer|dis|dites|dire|"
+        r"parle|parles|parlez|parler|raconte|racontes|racontez|raconter|presente|presentez|presenter|"
+        r"indique|indiquez|indiquer|informe|informes|informez|informer|detaille|detailles|detaillez|"
+        r"detailler|resume|resumes|resumez|resumer)\b.*\b"
         + TRINITTY_UPDATE_KEYWORD_PATTERN
         + r"\b",
         r"\b(informations?|infos?|notes?|changelog|recap|resume|details?)\b.*\b"
         + TRINITTY_UPDATE_KEYWORD_PATTERN
         + r"\b",
+        r"\b(quoi|qu est ce qui|quest ce qui|ce qui)\b.*\b"
+        r"(change|a change|a chang[eé]|corrige|corrig[eé]|ameliore|am[eé]liore)\b.*\b"
+        r"(mise [aà] jour|maj)\b",
+        r"\b(qu apporte|quoi apporte|apporte quoi|ce qu apporte|ce que apporte)\b.*\b(mise [aà] jour|maj)\b",
+        r"\b(changements?|modifs?|modifications?|corrections?|ameliorations?|am[eé]liorations?|nouveaut[eé]s?)\b.*\b"
+        r"(mise [aà] jour|maj)\b",
         r"\b(derni[eè]re|nouvelle|r[eé]cente)\b.*\b(mise [aà] jour|version)\b",
         r"\b(il y a|y a|existe)\b.*\bmise [aà] jour\b",
         r"^%s$" % TRINITTY_UPDATE_KEYWORD_PATTERN,

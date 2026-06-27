@@ -9,10 +9,14 @@ F_trinity_help,quelles*sont*[tes/vos] [fonction/commande/possibilite]
 F_trinity_help,a quoi*[sers-tu/servez-vous]
 F_trinity_help,[parle-moi de toi/parlez-moi de vous]
 F_trinity_help,qu*peut*faire*avec [toi/vous]
-F_trinitty_update,[informations/information/infos/info/note/affiche]*mise a jour*trinitty
-F_trinitty_update,derniere*[mise a jour/version]*trinitty
+F_trinitty_update,[donne{r/s/z/}/affiche{r/s/z/}/liste{r/s/z/}/montre{r/s/z/}/explique{r/s/z/}/parle{r/s/z/}/raconte{r/s/z/}/presente{r/s/z/}/indique{r/s/z/}/informe{r/s/z/}/detaille{r/s/z/}/resume{r/s/z/}/dis/dites/dire]*[information/informations/info/infos/note/notes/detail/details/changelog/recap/resume/nouveaute/nouveautes]*[mise a jour/mise à jour/maj/derniere version/dernière version/version recente/version récente]
+F_trinitty_update,[informations/information/infos/info/note/notes/changelog/recap/resume/nouveaute/nouveautes]*[mise a jour/mise à jour/maj/derniere version/dernière version/version recente/version récente]*[trinitty/trinity/assistant/programme]
+F_trinitty_update,derniere*[mise a jour/version]*[trinitty/trinity/assistant/programme]
 F_trinitty_update,quoi*[nouveau/neuf]*[trinitty/mise a jour/mise à jour]
-F_trinitty_update,changelog*trinitty
+F_trinitty_update,changelog*[trinitty/trinity/assistant/programme]
+F_trinitty_update,[quoi/qu est ce qui/qu'est-ce qui/qu'est ce qui/quest ce qui/ce qui]*[change/a change/a changé/apporte/corrige/corrigé/ameliore/améliore]*[mise a jour/mise à jour/maj]
+F_trinitty_update,[qu apporte/qu'apporte/quoi apporte/apporte quoi/ce qu apporte/ce qu'apporte/ce que apporte]*[mise a jour/mise à jour/maj]
+F_trinitty_update,[changement/changements/modif/modifs/modification/modifications/correction/corrections/amelioration/ameliorations/amélioration/améliorations/nouveaute/nouveautes/nouveauté/nouveautés]*[mise a jour/mise à jour/maj]
 F_prompt,[le prompt/invite de commande/le clavier/interpreteur]
 F_prompt,[que*je/j'ai*de/je*de] [t'ecrive/t'ecrire/vous ecrive/vous ecrire]
 F_prompt,[t'ecrire/de vous ecrire/je*te*l'ecri/je*vous*l'ecrire/vais l'ecrire/va l'ecrire/il*te l'ecrire/il*vous l'ecrire/vais*te l'ecrire/vais*vous l'ecrire]
