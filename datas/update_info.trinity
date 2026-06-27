@@ -1,20 +1,34 @@
-Version: 0.1.40
-Titre: Affichage de la réponse après lecture audio
+Version: 0.1.46
+Titre: Déclencheurs principaux et alternatifs compactés
 Date: 2026-06-27
 
 Résumé:
-Cette mise à jour ajuste le moment où Trinitty affiche le texte d'une réponse vocale. Le texte complet n'est plus affiché avant la génération audio ni avant la lecture en mode classique, et le mode streaming affiche la réponse complète seulement une fois les segments lus et le WAV final concaténé.
+Cette mise à jour ajoute un garde-fou pour les demandes ambiguës de mise à jour. Quand une phrase comme "quoi de neuf avec cette mise à jour" ne précise pas Trinitty, l'assistant demande maintenant si la question parle bien de sa propre mise à jour. Si la réponse est oui, la commande d'information Trinitty est lancée. Si la réponse est non ou reste incertaine, la phrase reprend le flux normal et peut être traitée comme une recherche ou une question classique.
 
-Le résultat est plus cohérent avec ce que l'utilisateur entend: Trinitty parle d'abord, puis affiche le texte complet correspondant au WAV sauvegardé pour l'historique et pour la fonction répète.
+Un nouveau déclencheur large a aussi été ajouté dans alt_cmd.trinity avec la syntaxe spéciale. Il couvre plusieurs formulations autour de "mise à jour", "dernière version", "changelog", "quoi de neuf" et "quoi de nouveau", tout en gardant un marqueur Trinitty, Trinity, assistant ou programme pour éviter de capturer directement les mises à jour d'autres sujets.
+
+Les déclencheurs alternatifs répétitifs liés à l'historique et à l'aide ont été compactés avec la même syntaxe spéciale. Les variantes "montre-moi l'historique", "affiche moi l'historique", "tu peux m'afficher l'historique", "recherche dans l'historique" ou "efface la dernière entrée de l'historique" restent couvertes, mais avec moins de lignes à maintenir.
+
+Le fichier principal cmd.trinity a été compacté de la même manière. Les familles de commandes nom, signification, créateur, aide, mise à jour, prompt, script, choix aléatoire, répète, historique, lecture audio, recherche web et ajout de déclencheur utilisent maintenant davantage la syntaxe spéciale. Le gros bloc de recherche web a aussi été réduit pour éviter des milliers d'expansions inutiles au démarrage.
+
+Elle corrige enfin deux comportements visibles. D'abord, l'ajout d'un nouveau déclencheur ne considère plus la fonction que l'utilisateur est justement en train d'enrichir comme une ambiguïté bloquante. Le cas des déclencheurs de mise à jour, comme "donne les informations mise a jour trinitty", peut maintenant être validé même s'il correspond déjà à la fonction Trinitty_Update_Info.
+
+Ensuite, l'affichage du texte de réponse est déclenché directement après la lecture audio et après Save_History. Cela évite que le retour en veille empêche l'affichage de la réponse complète.
 
 Changements principaux:
-- ajout d'un affichage centralisé de la réponse texte;
-- affichage après Play_Response en mode classique;
-- affichage après lecture des segments et concaténation finale en mode streaming;
-- conservation de l'ordre lecture, concaténation streaming, affichage, historique;
-- ajout de tests de régression sur l'ordre d'affichage.
+- confirmation vocale pour les demandes génériques de mise à jour avant de lancer Trinitty_Update_Info;
+- les demandes explicites qui citent Trinitty, Trinity, l'assistant ou le programme ne demandent pas de confirmation;
+- un refus ou une réponse incertaine laisse la demande repartir dans le flux normal;
+- ajout d'un déclencheur alt_cmd.trinity en syntaxe spéciale pour couvrir davantage de formulations de mise à jour;
+- compactage des déclencheurs alt_cmd.trinity pour l'historique, la recherche historique, l'aide et la suppression de dernière entrée;
+- compactage de cmd.trinity et réduction du nombre d'expansions de recherche web;
+- Add_Trigger compare les ambiguïtés avec l'identifiant réel de la fonction sélectionnée;
+- les déclencheurs générés qui ne correspondent qu'à la fonction cible ne sont plus signalés comme ambigus;
+- la réutilisation de l'aide d'ajout conserve l'identifiant interne de fonction, pas le nom affiché;
+- affichage de la réponse au format "Reponse: ..." après lecture et sauvegarde;
+- ajout de tests de régression sur l'ajout de déclencheur et l'ordre lecture, historique, affichage.
 
 Commandes utiles:
 - trinitty --update-info
 - dites: "informations de mise à jour de Trinitty"
-- dites: "quoi de neuf avec cette mise à jour"
+- dites: "quoi de neuf avec cette mise à jour", puis confirmez si la question concerne Trinitty

@@ -1,16 +1,6 @@
 trigger,function
-recherche * dans l'historique,F_search_history
-comment * t'utilise,F_trinity_help
-montre-moi l'historique,F_show_history
-montre moi l'historique,F_show_history
-affiche-moi l'historique,F_show_history
-affiche moi l'historique,F_show_history
-peux-tu afficher l'historique,F_show_history
-peux tu afficher l'historique,F_show_history
-tu peux afficher l'historique,F_show_history
-tu peux m'afficher l'historique,F_show_history
-est ce que tu peux afficher l'historique,F_show_history
-ouvre-moi l'historique,F_show_history
-ouvre moi l'historique,F_show_history
-efface la derniere entree de l'historique,F_delete_last_history
-supprime la derniere entree de l'historique,F_delete_last_history
+[recherche/cherche/trouve/regarde/verifie/vérifie] * [dans/sur/] [l']historique,F_search_history
+[comment/comment est ce que] * [t'utilise/t utiliser/vous utilise/vous utiliser/utiliser trinitty/utiliser trinity/utiliser l'assistant],F_trinity_help
+[montre{-moi/ moi/}/affiche{-moi/ moi/}/ouvre{-moi/ moi/}/peux{-tu/ tu/} afficher/tu peux{ m'afficher/ afficher}/est ce que tu peux afficher] [l']historique,F_show_history
+[efface/supprime/retire] [la/] derniere [entree/reponse] [de/] [l']historique,F_delete_last_history
+[donne/affiche/liste/montre/explique/dis/parle] * [mise a jour/mise à jour/maj/derniere version/dernière version/version recente/version récente/changelog/quoi de neuf/quoi de nouveau] * [trinitty/trinity/assistant/programme],F_trinitty_update

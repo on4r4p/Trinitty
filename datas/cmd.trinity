@@ -1,190 +1,52 @@
 function,trigger
-F_trinity_name,comment*tu*t'appeles
-F_trinity_name,comment*vous*vous appelez
-F_trinity_name,c'est quoi*ton *nom
-F_trinity_name,c'est quoi*votre *nom
-F_trinity_name,quel*ton nom
-F_trinity_name,quel*votre nom
-F_trinity_mean,pourquoi*tu*appel*trinitty
-F_trinity_mean,pourquoi*vous*trinitty
-F_trinity_mean,pourquoi*t'appelles*comme ca
-F_trinity_mean,pourquoi*vous*appelez*comme ca
-F_trinity_mean,pourquoi*t'a*ce *nom
-F_trinity_mean,pourquoi*vous avez*ce *nom
-F_trinity_mean,pourquoi*tu*ce *nom
-F_trinity_mean,pourquoi*vous*ce *nom
-F_trinity_dev,qui*t'a cree
-F_trinity_dev,qui*vous a cree
-F_trinity_dev,qui*t'a programe
-F_trinity_dev,qui*vous a programe
-F_trinity_dev,qui*t'a fait
-F_trinity_dev,qui*vous a fait
-F_trinity_dev,qui*t'a concu
-F_trinity_dev,qui*vous a concu
-F_trinity_dev,qui*t'a fabrique
-F_trinity_dev,qui*vous a fabrique
-F_trinity_dev,qui*t'a*ce nom
-F_trinity_dev,qui*vous a*ce nom
-F_trinity_dev,qui*t'a appelle*comme
-F_trinity_dev,qui*vous a appelé*comme
-F_trinity_dev,qui*t'a*appelé*maniere
-F_trinity_dev,qui*vous a*appelé*maniere
-F_trinity_dev,qui*t'a*appelé*ainsi
-F_trinity_dev,qui*vous a*appelé*ainsi
-F_trinity_help,affiche*moi*ton aide
-F_trinity_help,affiche*ton aide
-F_trinity_help,affiches*ton aide
-F_trinity_help,affiche*aide
-F_trinity_help,affiches*aide
-F_trinity_help,affichez*moi*votre aide
-F_trinity_help,affichez*votre aide
-F_trinity_help,affiche*tes fonction
-F_trinity_help,affichez*vos fonction
-F_trinity_help,affiche*tes commande
-F_trinity_help,affichez*vos commande
-F_trinity_help,liste*tes commande
-F_trinity_help,listez*vos commande
-F_trinity_help,montre*tes commande
-F_trinity_help,montrez*vos commande
-F_trinity_help,quelles*sont*tes fonction
-F_trinity_help,quelles*sont*vos fonction
-F_trinity_help,a quoi*sers-tu
-F_trinity_help,a quoi*servez-vous
-F_trinity_help,quelles*sont*tes commande
-F_trinity_help,quelles*sont*vos commande
-F_trinity_help,parle-moi de toi
-F_trinity_help,parlez-moi de vous
-F_trinity_help,quelles*sont*tes possibilite
-F_trinity_help,quelles*sont*vos possibilite
-F_trinity_help,qu*peut*faire*avec toi
-F_trinity_help,qu*peut*faire*avec vous
-F_trinitty_update,informations*mise a jour*trinitty
-F_trinitty_update,information*mise a jour*trinitty
-F_trinitty_update,infos*mise a jour*trinitty
-F_trinitty_update,info*mise a jour*trinitty
-F_trinitty_update,derniere*mise a jour*trinitty
-F_trinitty_update,derniere*version*trinitty
-F_trinitty_update,quoi*nouveau*trinitty
-F_trinitty_update,quoi*neuf*mise a jour
-F_trinitty_update,quoi*neuf*mise à jour
-F_trinitty_update,quoi*neuf*trinitty
+F_trinity_name,[comment*{tu*t'appeles/vous*vous appelez}/c'est quoi*{ton/votre} *nom/quel*{ton/votre} nom]
+F_trinity_mean,pourquoi*[tu*appel*trinitty/vous*trinitty/t'appelles*comme ca/vous*appelez*comme ca/{t'a/vous avez/tu/vous}*ce *nom]
+F_trinity_dev,qui*[{t'a/vous a} {cree/programe/fait/concu/fabrique}/{t'a/vous a}*ce nom/{t'a appelle/vous a appelé}*comme/{t'a/vous a}*appelé*{maniere/ainsi}]
+F_trinity_help,[affiche/affiches]*[moi*ton aide/ton aide/aide/tes fonction/tes commande]
+F_trinity_help,affichez*[moi*votre aide/votre aide/vos fonction/vos commande]
+F_trinity_help,[liste/listez/montre/montrez]*[tes commande/vos commande]
+F_trinity_help,quelles*sont*[tes/vos] [fonction/commande/possibilite]
+F_trinity_help,a quoi*[sers-tu/servez-vous]
+F_trinity_help,[parle-moi de toi/parlez-moi de vous]
+F_trinity_help,qu*peut*faire*avec [toi/vous]
+F_trinitty_update,[informations/information/infos/info/note/affiche]*mise a jour*trinitty
+F_trinitty_update,derniere*[mise a jour/version]*trinitty
+F_trinitty_update,quoi*[nouveau/neuf]*[trinitty/mise a jour/mise à jour]
 F_trinitty_update,changelog*trinitty
-F_trinitty_update,note*mise a jour*trinitty
-F_trinitty_update,affiche*mise a jour*trinitty
-F_prompt,le prompt
-F_prompt,que*je t'ecrive
-F_prompt,que*je vous ecrive
-F_prompt, t'ecrire
-F_prompt,de vous ecrire 
-F_prompt,je*te*l'ecri
-F_prompt,je*vous*l'ecrire
-F_prompt,vais l'ecrire
-F_prompt,va l'ecrire
-F_prompt,il*te l'ecrire
-F_prompt,il*vous l'ecrire
-F_prompt,vais*te l'ecrire
-F_prompt,vais*vous l'ecrire
-F_prompt,invite de commande
-F_prompt,le clavier
-F_prompt,j'ai*de t'ecrire
-F_prompt,j'ai*de vous ecrire
-F_prompt,je*de t'ecrire
-F_prompt,je*de vous ecrire
-F_prompt,interpreteur
-F_trinity_script,affiche ton code source
-F_trinity_script,affichez votre code source
-F_trinity_script,script trinitty
-F_trinity_script,affiche*fonction
-F_trinity_script,explique*fonction
-F_trinity_script,montre*partie
-F_trinity_script,liste*fonctions*liees
-F_trinity_script,liste*fonctions*liées
-F_rnd,choix aleatoire
-F_rnd,entre oui et non
-F_rnd,choisis*entre
-F_rnd,choisi*entre
-F_rnd,choisissez*entre
-F_rnd,choisis*ou
-F_rnd,choisi*ou
-F_rnd,choisissez*ou
-F_rnd,choix*aleatoire*entre
-F_rnd,choix*au hasard*entre
-F_rnd,tranche*entre
-F_rnd,tire*sort*entre
-F_repeat,tu peux*repete
-F_repeat,vous*pouvez*repeter
-F_repeat,moyen*tu repete
-F_repeat,moyen*vous repetiez
-F_repeat,moyen de repete
-F_repeat,possible*tu repete
-F_repeat,possible*vous repetiez
-F_repeat,possible de repete
-F_repeat,j*ai*pas*entendu
-F_repeat,j*ai*pas*compris
-F_repeat,rien entendu
-F_repeat,j*ai*rien compri
-F_repeat,repete ta
-F_repeat,repetez votre
-F_repeat,repete*moi
-F_repeat,repetez*moi
-F_repeat,redis*ce que
-F_repeat,redis*ca
-F_repeat,redites*ce que
-F_repeat,redites*ca
-F_repeat,t'a dis quoi
-F_repeat,qu'*que t*a* dis
-F_repeat,vous avez dit quoi
-F_repeat,qu'*que vous* dis
-F_show_history,affiche l'historique
-F_show_history,affiche*historique
-F_show_history,afficher*historique
-F_show_history,montre*historique
-F_show_history,montrer*historique
-F_show_history,ouvre*historique
-F_show_history,ouvrir*historique
-F_show_history,liste*historique
-F_show_history,lister*historique
-F_show_history,consulte*historique
-F_show_history,consulter*historique
-F_show_history,est*ce*que*tu*peux*afficher*historique
-F_show_history,estce*tu*peux*afficher*historique
-F_show_history,peux*tu*afficher*historique
-F_show_history,tu*peux*afficher*historique
+F_prompt,[le prompt/invite de commande/le clavier/interpreteur]
+F_prompt,[que*je/j'ai*de/je*de] [t'ecrive/t'ecrire/vous ecrive/vous ecrire]
+F_prompt,[t'ecrire/de vous ecrire/je*te*l'ecri/je*vous*l'ecrire/vais l'ecrire/va l'ecrire/il*te l'ecrire/il*vous l'ecrire/vais*te l'ecrire/vais*vous l'ecrire]
+F_trinity_script,[affiche ton code source/affichez votre code source/script trinitty]
+F_trinity_script,[affiche/explique]*fonction
+F_trinity_script,[montre*partie/liste*fonctions*liees/liste*fonctions*liées]
+F_rnd,[choix aleatoire/entre oui et non]
+F_rnd,[choisis/choisi/choisissez]*[entre/ou]
+F_rnd,choix*[aleatoire/au hasard]*entre
+F_rnd,[tranche/tire*sort]*entre
+F_repeat,[tu peux*repete/vous*pouvez*repeter]
+F_repeat,[moyen/possible]*[tu repete/vous repetiez/de repete]
+F_repeat,[j*ai*pas*{entendu/compris}/rien entendu/j*ai*rien compri]
+F_repeat,[repete ta/repetez votre/repete*moi/repetez*moi]
+F_repeat,[redis/redites]*[ce que/ca]
+F_repeat,[t'a dis quoi/qu'*que t*a* dis/vous avez dit quoi/qu'*que vous* dis]
+F_show_history,[affiche l'historique/affiche*historique/afficher*historique/montre*historique/montrer*historique/ouvre*historique/ouvrir*historique/liste*historique/lister*historique/consulte*historique/consulter*historique]
+F_show_history,[est*ce*que*tu*peux/estce*tu*peux/peux*tu/tu*peux]*afficher*historique
 F_search_history,[rappelle{s-tu/ toi/}/souviens{-tu/ toi/}/sais{-tu/}]*[deja {parle/discute}]*[avec toi/avec vous/ensemble/][ historique/] 
 F_search_history,[pag{e /es }/inf{o /os }/resultat{s /}]*[parl{e /ent /ant /eraient }/concern{e /ent /eraient }/en rapport ]*[ historique/]
 F_search_history,[cherche{r/z/-moi}/trouve{r/z/-moi}/regarde{r/z/-moi}/verifie{r/z/-moi}] * dans l'historique
 F_delete_last_history,[efface/supprime/retire] [la/] derniere [entree/reponse] [de/] [l']historique
 F_read_link,[ ce que contient / le contenu / ce qu*il*y*a{ dans / sur }/ ce qu*il*y*a{ dans / sur }/ ce qu*ya{ dans / sur }][*/ce /cette /un /une ] [*/page internet / page web / url/ site internet/ site web]
 F_read_link,l'interrieur
-F_play_audio,fichier*audio
-F_play_audio,fichier*son
-F_play_audio,fichier*wav
-F_play_audio,point*wav
-F_play_audio,ce fichier
-F_play_audio,enregistrement
-F_play_audio,lecture*fichier
-F_search_web,[ avec / sur / dans ][*/][ wikipedia / google / internet ][un{e/} /des /][page{s/} /info{s/} /truc{s/} /article{s/} /][avec /sur /dans /][wikipedia/google/internet/]
-F_search_web,[pag{e /es }/inf{o /os }]*[parl{e /ent /ant /eraient }/concern{e /ent /eraient }/en rapport ]*[ wikipedia / google / internet ]
+F_play_audio,[fichier*{audio/son/wav}/point*wav/ce fichier/enregistrement/lecture*fichier]
+F_search_web,[avec/sur/dans] * [wikipedia/google/internet]
+F_search_web,[page/pages/info/infos/truc/trucs/article/articles] * [parle/parlent/parlant/concernant/concerne/concernent/en rapport] * [wikipedia/google/internet]
 F_search_web,[fais/faire/lance/lancer] [*/une /des ]recherche{s/} * [internet/google/web]
 F_search_web,[cherche/cherches/cherchez/recherche/recherches/recherchez/trouve/trouves/trouvez/regarde/regardes/regardez/verifie/verifies/verifiez/consulte/consultez] * [internet/google/web]
 F_wait,[me laisser/laiss{e/ez}-moi/attend{s/ez}]*[second{e/es}/minut{e/es}/{un peu de/du/plus de} temps/un peu]
 F_wait,[{mets-/fous-/}toi en {veille/pause}/{mettez/foutez} vous en {veille/pause}/{tais-toi/taisez-vous/ferme-la/fermez-la}]
 F_quit,[{ferme/fermez/quitte/quittez/sors/sortez} {ton/le/la/de/du/ta/votre} {programme/scripte/fonction}]
-F_add_trigger,declencheur*ta base de donnee
-F_add_trigger,phrase*ta base de donnee
-F_add_trigger,declencheur*ta base de donnee
-F_add_trigger,activateur*ta base de donnee
-F_add_trigger,fonction*ta base de donnee
-F_add_trigger,declencher*tes*fonction
-F_add_trigger,declencheur*votre base de donnee
-F_add_trigger,phrase*votre base de donnee
-F_add_trigger,declencheur*votre base de donnee
-F_add_trigger,activateur*votre base de donnee
-F_add_trigger,fonction*votre base de donnee
-F_add_trigger,declencher*vos*fonction
-F_add_trigger,nouveau*declencheur
-F_add_trigger,activateur*fonction
-F_add_trigger,nouvel*activateur
-F_add_trigger,nouveau*trigger
+F_add_trigger,[declencheur/phrase/activateur/fonction]*[ta/votre] base de donnee
+F_add_trigger,declencher*[tes/vos]*fonction
+F_add_trigger,[nouveau*declencheur/activateur*fonction/nouvel*activateur/nouveau*trigger]
 F_read_results,[lis{-moi/}/dis{-moi/}/parle{-moi/}] * [{des/les} resultats/ce que tu as trouve/tout ca]
 F_sort_results,par ordre[ chronologique/ ant{é/i}chronologique]

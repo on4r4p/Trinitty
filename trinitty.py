@@ -5163,7 +5163,7 @@ def Add_Trigger(trigger_input=None, func_name_to_add=None, specific_trigger=None
         if help_already_print:
             print(f"Vous avez choisi {function_to_print}: {function_description}")
             Play_Audio_File(SCRIPT_PATH + "/local_sounds/prompt/2.wav")
-            return(function_to_print)
+            return(function_id_name)
         print(f"Vous avez choisi {function_to_print}: {function_description}")
         Play_Audio_File("%s/local_sounds/cmd/instruction.wav" % SCRIPT_PATH)
 
@@ -5340,7 +5340,7 @@ def Add_Trigger(trigger_input=None, func_name_to_add=None, specific_trigger=None
 
 
 
-        ambiguity = Check_Ambiguity(to_check,to_match=func_name_to_add)
+        ambiguity = Check_Ambiguity(to_check,to_match=funcname)
 
         if not ambiguity:
 
@@ -6370,17 +6370,31 @@ def Detect_Trinitty_Help_Request(text):
     return bool(re.search(help_words, normalized) and re.search(action_words, normalized))
 
 
+TRINITTY_UPDATE_CONFIRM_TEXT = "Est-ce que vous parlez de ma mise à jour ?"
+TRINITTY_UPDATE_MARKERS = {"trinitty", "trinity", "assistant", "programme"}
+
+
+def Trinitty_Update_Request_Has_Marker(text):
+    normalized = Normalize_Help_Command_Text(text)
+    if not normalized:
+        return False
+
+    tokens = set(normalized.split())
+    return bool(tokens.intersection(TRINITTY_UPDATE_MARKERS))
+
+
 def Detect_Trinitty_Update_Request(text):
     normalized = Normalize_Help_Command_Text(text)
     if not normalized:
         return False
 
-    trinitty_markers = {"trinitty", "trinity", "assistant", "programme"}
-    tokens = set(normalized.split())
-    if not tokens.intersection(trinitty_markers):
+    if not Trinitty_Update_Request_Has_Marker(normalized):
         markerless_update_patterns = [
             r"^quoi de neuf (avec |sur |pour |dans )?(cette |la |ta |ton )?mise [aà] jour$",
             r"^(cette |la |ta |ton )?mise [aà] jour.*quoi de neuf$",
+            r"^(donne|affiche|liste|montre|explique).*\b(informations?|infos?|notes?)\b.*\bmise [aà] jour$",
+            r"^(informations?|infos?|notes?)\b.*\bmise [aà] jour$",
+            r"^(donne|affiche|liste|montre|explique).*\b(changelog|derni[eè]re version)$",
         ]
         if not any(re.search(pattern, normalized) for pattern in markerless_update_patterns):
             return False
@@ -6400,6 +6414,46 @@ def Detect_Trinitty_Update_Request(text):
         r"\bchangelog\b",
     ]
     return any(re.search(pattern, normalized) for pattern in update_patterns)
+
+
+def Play_Trinitty_Update_Confirmation_Prompt():
+    PRINT("\n-Trinitty:%s" % TRINITTY_UPDATE_CONFIRM_TEXT)
+    prompt_wav = Local_Sound_Path("question", "trinitty_update_confirm.wav")
+    if os.path.exists(prompt_wav):
+        Play_Audio_File(prompt_wav)
+        return True
+
+    generated_wav = Runtime_Tmp_Path("trinitty_update_confirm.wav")
+    if Synthesize_Text_To_Wav(TRINITTY_UPDATE_CONFIRM_TEXT, generated_wav):
+        Play_Audio_File(generated_wav)
+        return True
+
+    return False
+
+
+def Ask_Trinitty_Update_Confirmation():
+    Play_Trinitty_Update_Confirmation_Prompt()
+
+    txt = ""
+    opinion = False
+    if Start_Thread_Record() is not False and Wait_for("audio"):
+        audio = Queue_Get_Optional(audio_datas, timeout=0.2, default=None)
+        if audio is not None:
+            transcripts, transcripts_confidence, words, words_confidence, Err_msg = Speech_To_Text(audio)
+            txt, _fconf = Check_Transcript(transcripts, transcripts_confidence, words, words_confidence, Err_msg)
+
+    if txt:
+        opinion = Detect_Question_Opinion(txt)
+        if opinion is None:
+            Question(txt)
+            if Wait_for("question"):
+                opinion = Queue_Get_Optional(score_sentiment, timeout=0.2, default=False)
+
+    confirmed = opinion is True
+    if not confirmed:
+        Queue_Drain(cancel_operation)
+        Queue_Drain(No_Input)
+    return confirmed
 
 
 def Results_Hub_Direct_Command(text, allowed_functions=None):
@@ -6513,6 +6567,10 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
         PRINT("\n-Trinitty:Commandes():direct update info command.")
         if CMD_DBG or from_function:
             return "F_trinitty_update"
+        if not Trinitty_Update_Request_Has_Marker(decoded):
+            if not Ask_Trinitty_Update_Confirmation():
+                PRINT("\n-Trinitty:Commandes():markerless update info command declined.")
+                return False
         return Trinitty_Update_Info()
 
     #    filter = ["s'il te plait","si te plait","sil te plait","merci"," stp "]
@@ -8390,14 +8448,12 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
         if Err_Concatenation:
             return Play_Response(stay_awake=stayawake, save_history=savehistory, answer_txt=txtinput)
 
-        play_result = Play_Response(
+        return Play_Response(
             audio_response=final_wav,
             stay_awake=stayawake,
             save_history=savehistory,
             answer_txt=txtinput,
         )
-        Display_Response_Text(txtinput)
-        return play_result
 
 
     Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_audio_sox.wav")
@@ -8413,7 +8469,6 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
         )
 
         Play_Audio_File(SCRIPT_PATH + "/local_sounds/errors/err_no_audio_but_txt_sox.wav")
-        print("\n\n-Trinitty:Réponse:\n", txtinput)
 
         return Play_Response(stay_awake=stayawake, save_history=savehistory, answer_txt=txtinput)
     return Play_Response(stay_awake=stayawake, save_history=False)
@@ -8423,7 +8478,8 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
 
 
 def Display_Response_Text(answer_txt):
-    print("\n-Trinitty:\n\n%s\n\n" % answer_txt)
+    if answer_txt is not None and str(answer_txt).strip():
+        print("\nReponse: %s\n" % str(answer_txt).strip())
 
 
 def Concatenate_Wav_Files(wav_files, output_path):
@@ -8485,14 +8541,13 @@ def Text_To_Speech_Streamed(segment_iter, stayawake=False, savehistory=True, bef
     answer_txt = " ".join(segments).strip()
     final_wav = Runtime_Tmp_Path("current_answer.wav")
     wav_ready = Concatenate_Wav_Files(wav_files, final_wav)
-    if wav_ready:
-        Display_Response_Text(answer_txt)
 
     if savehistory:
         if wav_ready:
             Save_History(answer_txt)
         else:
             Save_History(answer_txt, no_audio=True)
+    Display_Response_Text(answer_txt)
 
     Runtime_Debug_Event(
         "tts",
@@ -8865,6 +8920,7 @@ def Play_Response(audio_response=None, stay_awake=False, save_history=True, answ
             Save_History(answer_txt)
         else:
             Save_History(answer_txt, no_audio=True)
+    Display_Response_Text(answer_txt)
 
     if not stay_awake:
         Go_Back_To_Sleep(True)

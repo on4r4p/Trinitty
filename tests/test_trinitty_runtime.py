@@ -1,4 +1,5 @@
 import builtins
+import csv
 import contextlib
 import io
 import os
@@ -637,8 +638,8 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 ("tts", "Deuxieme phrase."),
                 ("play", "stream_answer0001.wav"),
                 ("concat", "current_answer.wav"),
-                ("display", "Premiere phrase. Deuxieme phrase."),
                 ("history", "Premiere phrase. Deuxieme phrase.", False),
+                ("display", "Premiere phrase. Deuxieme phrase."),
                 ("sleep", True),
             ],
             calls,
@@ -1043,6 +1044,78 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIsNone(
             trinitty.Commandes("quoi de neuf dans la mise à jour minecraft"),
         )
+
+    def test_update_info_marker_detection(self):
+        reset_command_state()
+        self.assertTrue(trinitty.Trinitty_Update_Request_Has_Marker("mise à jour de Trinitty"))
+        self.assertFalse(trinitty.Trinitty_Update_Request_Has_Marker("quoi de neuf avec cette mise à jour"))
+
+    def test_markerless_update_command_asks_confirmation_before_running(self):
+        reset_command_state()
+        calls = []
+        original_confirm = trinitty.Ask_Trinitty_Update_Confirmation
+        original_update = trinitty.Trinitty_Update_Info
+        try:
+            trinitty.Ask_Trinitty_Update_Confirmation = lambda: calls.append("confirm") or True
+            trinitty.Trinitty_Update_Info = lambda play_audio=True: calls.append(("update", play_audio)) or True
+            self.assertTrue(trinitty.Commandes("quoi de neuf avec cette mise à jour"))
+        finally:
+            trinitty.Ask_Trinitty_Update_Confirmation = original_confirm
+            trinitty.Trinitty_Update_Info = original_update
+
+        self.assertEqual(["confirm", ("update", True)], calls)
+
+    def test_markerless_update_command_declined_falls_back_to_normal_flow(self):
+        reset_command_state()
+        calls = []
+        original_confirm = trinitty.Ask_Trinitty_Update_Confirmation
+        original_update = trinitty.Trinitty_Update_Info
+        try:
+            trinitty.Ask_Trinitty_Update_Confirmation = lambda: calls.append("confirm") or False
+            trinitty.Trinitty_Update_Info = lambda play_audio=True: self.fail("update info should not run")
+            self.assertFalse(trinitty.Commandes("quoi de neuf avec cette mise à jour"))
+        finally:
+            trinitty.Ask_Trinitty_Update_Confirmation = original_confirm
+            trinitty.Trinitty_Update_Info = original_update
+
+        self.assertEqual(["confirm"], calls)
+
+    def test_update_confirmation_failure_clears_cancel_flags_for_fallback(self):
+        reset_command_state()
+        reset_runtime_queues()
+        original_prompt = trinitty.Play_Trinitty_Update_Confirmation_Prompt
+        original_start = trinitty.Start_Thread_Record
+        try:
+            trinitty.Play_Trinitty_Update_Confirmation_Prompt = lambda: True
+
+            def fail_record():
+                trinitty.cancel_operation.put(True)
+                trinitty.No_Input.put(True)
+                return False
+
+            trinitty.Start_Thread_Record = fail_record
+            self.assertFalse(trinitty.Ask_Trinitty_Update_Confirmation())
+        finally:
+            trinitty.Play_Trinitty_Update_Confirmation_Prompt = original_prompt
+            trinitty.Start_Thread_Record = original_start
+
+        self.assertTrue(trinitty.cancel_operation.empty())
+        self.assertTrue(trinitty.No_Input.empty())
+
+    def test_explicit_update_command_does_not_ask_confirmation(self):
+        reset_command_state()
+        calls = []
+        original_confirm = trinitty.Ask_Trinitty_Update_Confirmation
+        original_update = trinitty.Trinitty_Update_Info
+        try:
+            trinitty.Ask_Trinitty_Update_Confirmation = lambda: self.fail("confirmation should not run")
+            trinitty.Trinitty_Update_Info = lambda play_audio=True: calls.append(("update", play_audio)) or True
+            self.assertTrue(trinitty.Commandes("donne les informations de mise à jour de Trinitty"))
+        finally:
+            trinitty.Ask_Trinitty_Update_Confirmation = original_confirm
+            trinitty.Trinitty_Update_Info = original_update
+
+        self.assertEqual([("update", True)], calls)
 
     def test_doctor_fix_argument_runs_dependency_installer(self):
         calls = []
@@ -1819,6 +1892,103 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.SeeknReturn("historique puis ouvre historique", triggers),
         )
 
+    def test_check_ambiguity_ignores_target_function_when_adding_trigger(self):
+        reset_command_state()
+        trinitty.Loaded_Actions_Words_Requests = ["donne", "affiche", "liste"]
+        trinitty.Loaded_Trinitty_Update_Requests = [
+            "informations*mise a jour*trinitty",
+            "infos*mise a jour*trinitty",
+            "affiche*mise a jour*trinitty",
+        ]
+
+        generated_triggers = trinitty.Special_Syntax(
+            "[donne/affiche/liste] [les/des/] [informations/infos/notes] * mise a jour * trinitty",
+            "test",
+            1,
+        )
+
+        self.assertFalse(trinitty.Check_Ambiguity(generated_triggers, to_match="F_trinitty_update"))
+
+    def test_alt_cmd_update_special_syntax_is_broad_but_bounded(self):
+        rows = list(csv.DictReader((ROOT / "datas" / "alt_cmd.trinity").open(newline="")))
+        update_triggers = [row["trigger"] for row in rows if row.get("function") == "F_trinitty_update"]
+
+        self.assertTrue(update_triggers)
+        generated_triggers = trinitty.Special_Syntax(update_triggers[-1], "datas/alt_cmd.trinity", len(rows) + 1)
+
+        self.assertIsInstance(generated_triggers, list)
+        self.assertLessEqual(len(generated_triggers), 500)
+        self.assertIn("donne * mise a jour * trinitty", generated_triggers)
+        self.assertIn("explique * dernière version * assistant", generated_triggers)
+        self.assertIn("parle * quoi de neuf * programme", generated_triggers)
+
+    def test_alt_cmd_history_triggers_are_compact_special_syntax(self):
+        rows = list(csv.DictReader((ROOT / "datas" / "alt_cmd.trinity").open(newline="")))
+        triggers_by_function = {}
+        for row in rows:
+            triggers_by_function.setdefault(row.get("function"), []).append(row.get("trigger"))
+
+        expected_phrases = {
+            "F_search_history": ["recherche * dans l'historique"],
+            "F_trinity_help": ["comment * t'utilise"],
+            "F_show_history": [
+                "montre-moi l'historique",
+                "affiche moi l'historique",
+                "peux-tu afficher l'historique",
+                "tu peux m'afficher l'historique",
+                "est ce que tu peux afficher l'historique",
+                "ouvre moi l'historique",
+            ],
+            "F_delete_last_history": [
+                "efface la derniere entree de l'historique",
+                "supprime la derniere entree de l'historique",
+            ],
+        }
+
+        for function_name, phrases in expected_phrases.items():
+            trigger = triggers_by_function[function_name][0]
+            generated_triggers = trinitty.Special_Syntax(trigger, "datas/alt_cmd.trinity", 1)
+            self.assertIsInstance(generated_triggers, list)
+            self.assertLessEqual(len(generated_triggers), 50)
+            for phrase in phrases:
+                self.assertIn(phrase, generated_triggers)
+
+    def test_cmd_trinity_compact_special_syntax_covers_legacy_phrases(self):
+        rows = list(csv.DictReader((ROOT / "datas" / "cmd.trinity").open(newline="")))
+        generated_by_function = {}
+        for line_no, row in enumerate(rows, start=2):
+            generated = trinitty.Special_Syntax(row["trigger"], "datas/cmd.trinity", line_no)
+            self.assertTrue(generated)
+            generated_values = generated if isinstance(generated, list) else [generated]
+            generated_by_function.setdefault(row["function"], set()).update(generated_values)
+
+        self.assertLessEqual(len(rows), 60)
+        self.assertLessEqual(len(generated_by_function["F_search_web"]), 500)
+
+        expected_phrases = {
+            "F_trinity_name": ["comment*tu*t'appeles", "c'est quoi*votre *nom"],
+            "F_trinity_mean": ["pourquoi*vous avez*ce *nom"],
+            "F_trinity_dev": ["qui*t'a cree", "qui*vous a*appelé*ainsi"],
+            "F_trinity_help": [
+                "affiche*moi*ton aide",
+                "affichez*vos commande",
+                "quelles*sont*tes possibilite",
+                "qu*peut*faire*avec vous",
+            ],
+            "F_trinitty_update": ["info*mise a jour*trinitty", "quoi*neuf*mise à jour", "changelog*trinitty"],
+            "F_prompt": ["le prompt", "que*je t'ecrive", "je*vous*l'ecrire", "interpreteur"],
+            "F_trinity_script": ["affiche ton code source", "liste*fonctions*liées"],
+            "F_rnd": ["choix*au hasard*entre", "choisissez*ou"],
+            "F_repeat": ["possible*vous repetiez", "j*ai*pas*compris", "redites*ca"],
+            "F_show_history": ["affiche l'historique", "consulter*historique", "estce*tu*peux*afficher*historique"],
+            "F_play_audio": ["fichier*audio", "lecture*fichier"],
+            "F_add_trigger": ["declencheur*ta base de donnee", "declencher*vos*fonction", "nouvel*activateur"],
+            "F_search_web": ["cherche * internet", "fais une recherche * google"],
+        }
+        for function_name, phrases in expected_phrases.items():
+            for phrase in phrases:
+                self.assertIn(phrase, generated_by_function[function_name])
+
     def test_command_routes_read_results(self):
         reset_command_state()
         calls = []
@@ -2551,6 +2721,40 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Run_Playback_Command = original_run
 
         self.assertEqual([[trinitty.PLAY_BIN, "-q", audio_mp3]], calls)
+
+    def test_play_response_displays_text_after_playback_and_history(self):
+        reset_command_state()
+        calls = []
+        audio_wav = temp_path("answer.wav")
+        originals = (
+            trinitty.Play_Audio_File_With_Interrupt,
+            trinitty.Save_History,
+            trinitty.Display_Response_Text,
+            trinitty.Go_Back_To_Sleep,
+        )
+        trinitty.Play_Audio_File_With_Interrupt = lambda path: calls.append(("play", path)) or 0
+        trinitty.Save_History = lambda answer, no_audio=False: calls.append(("history", answer, no_audio))
+        trinitty.Display_Response_Text = lambda answer: calls.append(("display", answer))
+        trinitty.Go_Back_To_Sleep = lambda go_trinitty=True: calls.append(("sleep", go_trinitty)) or "sleep"
+        try:
+            trinitty.Play_Response(audio_wav, stay_awake=False, save_history=True, answer_txt="bonjour")
+        finally:
+            (
+                trinitty.Play_Audio_File_With_Interrupt,
+                trinitty.Save_History,
+                trinitty.Display_Response_Text,
+                trinitty.Go_Back_To_Sleep,
+            ) = originals
+
+        self.assertEqual(
+            [
+                ("play", audio_wav),
+                ("history", "bonjour", False),
+                ("display", "bonjour"),
+                ("sleep", True),
+            ],
+            calls,
+        )
 
     def test_run_playback_command_rejects_raw_string_command(self):
         calls = []
@@ -3640,7 +3844,6 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 trinitty.sox,
                 trinitty.time.sleep,
                 trinitty.Play_Response,
-                trinitty.Display_Response_Text,
                 getattr(trinitty, "DLANG_KEY", None),
                 getattr(trinitty, "GOOGLE_TRANSLATE", None),
             )
@@ -3648,7 +3851,6 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.sox = fake_sox
             trinitty.time.sleep = lambda _seconds: None
             trinitty.Play_Response = lambda **kwargs: calls.append(("play_response", kwargs)) or "played"
-            trinitty.Display_Response_Text = lambda answer: calls.append(("display", answer))
             trinitty.DLANG_KEY = False
             trinitty.GOOGLE_TRANSLATE = False
             try:
@@ -3659,7 +3861,6 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     trinitty.sox,
                     trinitty.time.sleep,
                     trinitty.Play_Response,
-                    trinitty.Display_Response_Text,
                     trinitty.DLANG_KEY,
                     trinitty.GOOGLE_TRANSLATE,
                 ) = originals
@@ -3667,8 +3868,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertTrue(tmp_dir.exists())
             self.assertFalse((tmp_dir / "answer0000.wav").exists())
             self.assertTrue((tmp_dir / "current_answer.wav").exists())
-            self.assertEqual("play_response", calls[-2][0])
-            self.assertEqual(("display", "bonjour"), calls[-1])
+            self.assertEqual("play_response", calls[-1][0])
 
     def test_text_to_speech_has_no_artificial_segment_sleep_on_success(self):
         reset_command_state()

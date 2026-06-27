@@ -162,6 +162,14 @@ class TrinittyStaticRegressionTests(unittest.TestCase):
         self.assertNotIn("Write_csv(to_check, funcname, ALTFILE)", self.source)
         self.assertNotIn("Write_csv(trigger_input, func_name_to_add, ALTFILE)", self.source)
 
+    def test_add_trigger_checks_ambiguity_against_selected_function(self):
+        self.assertIn("Check_Ambiguity(to_check,to_match=funcname)", self.source)
+        self.assertNotIn("Check_Ambiguity(to_check,to_match=func_name_to_add)", self.source)
+
+    def test_add_trigger_reuses_internal_function_id_after_help_retry(self):
+        self.assertIn("return(function_id_name)", self.source)
+        self.assertNotIn("return(function_to_print)", self.source)
+
     def test_installer_installs_packaging_tools_for_local_builds(self):
         installer = (ROOT / "install_dependencies.sh").read_text()
 
