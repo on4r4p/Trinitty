@@ -125,7 +125,13 @@ PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
 PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
 # True: autorise les résultats partiels Vosk. False réduit fortement les faux positifs.
 PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350
-# Niveau audio minimal pour accepter une commande stop/arrête. Augmenter si Trinitty s'arrête sans parole.
+# Niveau audio minimal pour accepter une commande stop/arrête après comparaison avec le bruit ambiant.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 900
+# Niveau RMS absolu qui accepte immédiatement une commande stop/arrête si la voix est forte.
+PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.6
+# Ratio minimal entre la voix détectée et le niveau déjà capté. Augmenter si le haut-parleur déclenche stop.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.75
+# Confiance minimale Vosk pour accepter le mot stop/arrête quand Vosk fournit des scores.
 
 COMMAND_CLASSIFIER_ENABLED = False
 # True: utiliser le classifieur TensorFlow optionnel.

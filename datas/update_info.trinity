@@ -1,9 +1,28 @@
-Version: 0.1.49
-Titre: Variantes vocales de mise à jour élargies
+Version: 0.1.52
+Titre: Stop Vosk restauré, aide moins intrusive et mises à jour mieux ciblées
 Date: 2026-06-27
 
 Résumé:
+Cette mise à jour corrige trois régressions. D'abord, les phrases longues qui finissent par "aide-moi s'il te plaît" ne déclenchent plus l'aide interne de Trinitty. Elles repartent dans le flux normal pour obtenir une vraie réponse à la question posée.
+
+Ensuite, une phrase qui raconte "j'ai essayé sur internet" ne déclenche plus automatiquement une recherche web. Trinitty attend maintenant une intention explicite comme "fais une recherche sur Google" ou "tu peux chercher sur internet".
+
+Enfin, l'interruption vocale pendant la lecture accepte de nouveau les mots "stop" ou "arrête" quand la voix est moins forte mais forme un pic clair par rapport au niveau déjà capté. Le seuil absolu reste utile pour une voix forte, mais il ne bloque plus systématiquement les micros cravate dont le niveau RMS est plus bas.
+
+Cette mise à jour rend aussi l'interruption vocale pendant la lecture plus lisible. Le détecteur local Vosk utilise une confiance minimale quand Vosk fournit des scores de mots. Cela réduit les faux arrêts quand le haut-parleur de Trinitty est repris faiblement par le micro cravate.
+
+Si le fichier local contenait encore l'ancien seuil par défaut PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 900, Trinitty le migre vers 350 au prochain lancement. Les valeurs personnalisées différentes restent conservées.
+
+Quand une lecture est réellement interrompue par un mot clé comme "stop" ou "arrête", Trinitty affiche maintenant la raison même avec DEBUG=False, par exemple avec le mot détecté, le niveau RMS et la confiance disponible. Cela permet de distinguer un arrêt volontaire d'une coupure liée à une détection locale.
+
+Nouvelles variables de configuration:
+- PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 900
+- PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.6
+- PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.75
+
 Cette mise à jour élargit les formulations vocales reconnues pour demander les informations de mise à jour. Une phrase comme "Tu peux me donner les infos sur ta mise à jour s'il te plaît" est maintenant couverte par cmd.trinity avec la syntaxe spéciale, sans devoir citer explicitement Trinitty.
+
+Les possessifs qui visent directement l'assistant, comme "ta mise à jour", "votre mise à jour", "ton changelog" ou "tes nouveautés", sont maintenant traités comme une référence explicite à Trinitty. Dans ces cas, Trinitty donne directement les informations de mise à jour au lieu de redemander une confirmation.
 
 La couverture accepte davantage de verbes et de noms courants: donner, afficher, lister, montrer, expliquer, parler, raconter, informer, détailler, résumer, ainsi que info, infos, informations, notes, changelog, récapitulatif et nouveautés. Elle couvre aussi les demandes du type "ce qui change", "qu'apporte la mise à jour", "changements", "modifs", "corrections" et "améliorations".
 
@@ -24,7 +43,15 @@ Elle corrige enfin deux comportements visibles. D'abord, l'ajout d'un nouveau d�
 Ensuite, l'affichage du texte de réponse est déclenché directement après la lecture audio et après Save_History. Cela évite que le retour en veille empêche l'affichage de la réponse complète.
 
 Changements principaux:
+- "aide-moi" dans une demande générale ne déclenche plus l'aide de Trinitty;
+- les récits du type "j'ai essayé sur internet" ne déclenchent plus F_search_web;
+- interruption Vosk restaurée pour les voix moins fortes mais clairement plus proches que le haut-parleur;
+- migration locale de l'ancien seuil stop PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 900 vers 350;
+- ratio de pic RMS ajouté pour distinguer la voix directe d'une fuite audio de haut-parleur;
+- score de confiance Vosk pris en compte quand il est disponible;
+- affichage de la raison d'interruption de lecture même sans DEBUG=True;
 - cmd.trinity couvre davantage de variantes de demande d'information sur la mise à jour;
+- "ta mise à jour", "votre mise à jour", "ton changelog" et "tes nouveautés" ne demandent plus de confirmation;
 - cmd.trinity couvre aussi les formulations "ce qui change", "qu'apporte", "modifs", "corrections" et "améliorations";
 - la politesse finale comme "s'il te plaît" n'est plus prise pour un sujet externe;
 - distinction entre demande générique de mise à jour et demande scoped sur un autre sujet;

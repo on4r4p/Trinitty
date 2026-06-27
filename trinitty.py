@@ -968,6 +968,11 @@ def Migrate_User_Config_Defaults(user_conf):
         "RESPONSE_STREAMING_ENABLED = False "
         "# False privilégie une réponse concaténée plus stable"
     )
+    old_playback_interrupt_min_rms_default = 900.0
+    new_playback_interrupt_min_rms_default = (
+        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350 "
+        "# Niveau audio minimal pour accepter une commande stop/arrête après comparaison avec le bruit ambiant."
+    )
 
     with open(user_conf) as f:
         lines = f.readlines()
@@ -984,6 +989,16 @@ def Migrate_User_Config_Defaults(user_conf):
             migrated_lines.append(new_response_streaming_default + newline)
             changed = True
         else:
+            key, value = Config_Option_Value(stripped)
+            if key == "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS":
+                try:
+                    value_as_float = float(value.split("#", 1)[0].strip())
+                except (AttributeError, TypeError, ValueError):
+                    value_as_float = None
+                if value_as_float == old_playback_interrupt_min_rms_default:
+                    migrated_lines.append(new_playback_interrupt_min_rms_default + newline)
+                    changed = True
+                    continue
             migrated_lines.append(line)
 
     if not changed:
@@ -1952,6 +1967,9 @@ PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez 
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
 PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
 PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 900
+PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.6
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.75
 WAKE_WORD_LOCAL_STT_ENABLED = True
 WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
 WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
@@ -2019,6 +2037,17 @@ COMMAND_TRIGGER_INDEX_SIGNATURE = None
 SCRIPT_INDEX_CACHE = None
 SCRIPT_INDEX_SIGNATURE = None
 AUDIO_DEVICE_LOCK = RLock()
+RUNTIME_QUEUE_NAMES = (
+    "record_on",
+    "chunks",
+    "last_sentence",
+    "No_Input",
+    "score_sentiment",
+    "audio_datas",
+    "wake_me_up",
+    "cancel_operation",
+    "awake",
+)
 
 
 def Queue_Get_Optional(queue_obj, timeout=0.2, default=QUEUE_MISSING):
@@ -2037,6 +2066,20 @@ def Queue_Drain(queue_obj):
         except Empty:
             break
     return drained
+
+
+def Ensure_Runtime_Queues():
+    created = []
+    for queue_name in RUNTIME_QUEUE_NAMES:
+        queue_obj = globals().get(queue_name)
+        if hasattr(queue_obj, "put") and hasattr(queue_obj, "get"):
+            continue
+        globals()[queue_name] = Queue()
+        created.append(queue_name)
+
+    if "wake_me_up" in created and globals()["wake_me_up"].empty():
+        globals()["wake_me_up"].put(True)
+    return created
 
 
 def Audio_Input_Available():
@@ -5680,12 +5723,24 @@ def Detect_Web_Search_Request(txt):
     if not has_web_scope:
         return False
 
-    has_search_noun = re.search(r"\brecherches?\b", query)
-    has_search_verb = re.search(
-        r"\b(cherche|cherches|cherchez|chercher|recherche|recherches|recherchez|rechercher|trouve|trouves|trouvez|trouver|regarde|regardes|regardez|regarder|verifie|verifies|verifiez|verifier|consulte|consultez|consulter|fais|faire|lance|lancer)\b",
-        query,
+    web_scope = r"(?:internet|google|web|wikipedia|wiki)"
+    search_verb = (
+        r"(?:cherche|cherches|cherchez|chercher|recherche|recherches|recherchez|rechercher|"
+        r"trouve|trouves|trouvez|trouver|regarde|regardes|regardez|regarder|"
+        r"verifie|verifies|verifiez|verifier|consulte|consultez|consulter|fais|faire|lance|lancer)"
     )
-    return bool(has_search_noun or has_search_verb)
+    request_prefix = (
+        r"(?:est ce que tu peux|est ce que vous pouvez|tu peux|peux tu|vous pouvez|pouvez vous|"
+        r"j aimerais que tu|je voudrais que tu|s il te plait|s il vous plait|stp|svp)"
+    )
+    request_patterns = [
+        r"\b%s\b.{0,80}\b%s\b.{0,120}\b%s\b" % (request_prefix, search_verb, web_scope),
+        r"^\s*\b%s\b.{0,120}\b%s\b" % (search_verb, web_scope),
+        r"\b(?:fais|faire|faites|lance|lancer)\s+(?:moi\s+)?(?:une\s+)?recherche\b.{0,120}\b%s\b"
+        % web_scope,
+        r"\brecherche\s+%s\b" % web_scope,
+    ]
+    return any(re.search(pattern, query) for pattern in request_patterns)
 
 
 def Random_Choice_Normalize_For_Match(text):
@@ -6361,13 +6416,24 @@ def Detect_Trinitty_Help_Request(text):
     if any(re.search(pattern, normalized) for pattern in capability_patterns):
         return True
 
+    target_words = r"\b(trinitty|trinity|assistant|programme|toi|vous|ton|ta|tes|votre|vos)\b"
+    if re.search(r"\b(aide moi|aidez moi|aide nous|aidez nous)\b", normalized) and not re.search(
+        target_words,
+        normalized,
+    ):
+        return False
+
     help_words = r"\b(aide|help|commande|commandes|fonction|fonctions|fonctionnalite|fonctionnalites|possibilite|possibilites)\b"
     action_words = (
         r"\b(affiche|affiches|affichez|montre|montres|montrez|liste|listes|listez|donne|donnes|donnez|"
         r"explique|expliques|expliquez|presente|presentes|presentez|indique|indiques|indiquez|"
         r"quelles|quels|quoi|comment)\b"
     )
-    return bool(re.search(help_words, normalized) and re.search(action_words, normalized))
+    return bool(
+        re.search(help_words, normalized)
+        and re.search(action_words, normalized)
+        and re.search(target_words, normalized)
+    )
 
 
 TRINITTY_UPDATE_CONFIRM_TEXT = "Est-ce que vous parlez de ma mise à jour ?"
@@ -6376,6 +6442,14 @@ TRINITTY_UPDATE_KEYWORD_PATTERN = (
     r"(?:mise [aà] jour|mises [aà] jour|maj|changelog|derni[eè]re version|"
     r"version r[eé]cente|nouveaut[eé]s?|quoi de neuf|quoi de nouveau)"
 )
+TRINITTY_UPDATE_SELF_MARKER_PATTERNS = [
+    r"\b(?:ta|votre)\s+(?:mise [aà] jour|maj|derni[eè]re version|version r[eé]cente)\b",
+    r"\b(?:ton|votre)\s+(?:changelog|r[eé]cap|recap|r[eé]sum[eé]|resume)\b",
+    r"\b(?:tes|vos)\s+(?:mises [aà] jour|nouveaut[eé]s?|changements?|modifs?|modifications?|"
+    r"corrections?|am[eé]liorations?)\b",
+    r"\b(?:mise [aà] jour|mises [aà] jour|maj|changelog|derni[eè]re version|version r[eé]cente|"
+    r"nouveaut[eé]s?)\s+(?:de|pour|sur)\s+(?:toi|vous)\b",
+]
 TRINITTY_UPDATE_GENERIC_SUBJECT_WORDS = {
     "a",
     "au",
@@ -6460,7 +6534,9 @@ def Trinitty_Update_Request_Has_Marker(text):
         return False
 
     tokens = set(normalized.split())
-    return bool(tokens.intersection(TRINITTY_UPDATE_MARKERS))
+    if tokens.intersection(TRINITTY_UPDATE_MARKERS):
+        return True
+    return any(re.search(pattern, normalized) for pattern in TRINITTY_UPDATE_SELF_MARKER_PATTERNS)
 
 
 def Normalize_Update_Subject_Text(text):
@@ -6584,6 +6660,7 @@ def Play_Trinitty_Update_Confirmation_Prompt():
 
 
 def Ask_Trinitty_Update_Confirmation():
+    Ensure_Runtime_Queues()
     Play_Trinitty_Update_Confirmation_Prompt()
 
     txt = ""
@@ -8779,11 +8856,61 @@ def Playback_Interrupt_Config_List(value):
 
 
 def Playback_Interrupt_Local_STT_Text(payload, key="text"):
+    text, _confidence = Playback_Interrupt_Local_STT_Result(payload, key=key)
+    return text
+
+
+def Playback_Interrupt_Local_STT_Result(payload, key="text"):
     try:
         data = json.loads(payload or "{}")
     except Exception:
-        return ""
-    return str(data.get(key) or "").strip()
+        return "", None
+    text = str(data.get(key) or "").strip()
+    confidences = []
+    for item in data.get("result", []) or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            confidences.append(float(item["conf"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    confidence = min(confidences) if confidences else None
+    return text, confidence
+
+
+def Playback_Interrupt_Confidence_Accepted(confidence, min_confidence):
+    if min_confidence <= 0 or confidence is None:
+        return True
+    return confidence >= min_confidence
+
+
+def Playback_Interrupt_Rms_Accepted(decision_rms, baseline_rms, min_rms, absolute_rms, spike_ratio):
+    try:
+        decision_rms = float(decision_rms)
+        baseline_rms = float(baseline_rms)
+        min_rms = float(min_rms)
+        absolute_rms = float(absolute_rms)
+        spike_ratio = float(spike_ratio)
+    except (TypeError, ValueError):
+        return False
+    if decision_rms < min_rms:
+        return False
+    if absolute_rms > 0 and decision_rms >= absolute_rms:
+        return True
+    if spike_ratio <= 0:
+        return True
+    if baseline_rms <= 0:
+        return False
+    return decision_rms >= baseline_rms * spike_ratio
+
+
+def Print_Playback_Interrupt_Reason(text, rms=None, confidence=None, provider="vosk"):
+    details = ["mot clé '%s'" % str(text or "").strip()]
+    if rms is not None:
+        details.append("rms %.0f" % float(rms))
+    if confidence is not None:
+        details.append("confiance %.2f" % float(confidence))
+    print("\n-Trinitty:Lecture interrompue: détection %s par %s." % (", ".join(details), provider))
 
 
 def Pcm_Rms_Level(pcm):
@@ -8839,6 +8966,18 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
         globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS", 350.0),
         350.0,
     )
+    absolute_rms = Config_Nonnegative_Float(
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR", 900.0),
+        900.0,
+    )
+    spike_ratio = Config_Nonnegative_Float(
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO", 1.6),
+        1.6,
+    )
+    min_confidence = Config_Nonnegative_Float(
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE", 0.75),
+        0.75,
+    )
     deadline = None
     if timeout is not None:
         timeout = float(timeout)
@@ -8863,6 +9002,11 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
             return None
 
         recognizer = Vosk_Call(vosk.KaldiRecognizer, model, 16000, grammar)
+        if hasattr(recognizer, "SetWords"):
+            try:
+                recognizer.SetWords(True)
+            except Exception as e:
+                PRINT("\n-Trinitty:Playback interrupt local STT SetWords ignored:%s" % str(e))
         if audio_lock is not None:
             audio_lock.acquire()
             audio_lock_acquired = True
@@ -8880,28 +9024,69 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
             if stop_event.is_set():
                 break
             current_rms = Pcm_Rms_Level(pcm)
+            baseline_rms = min(recent_rms_levels) if recent_rms_levels else current_rms
             recent_rms_levels.append(current_rms)
             recent_rms_levels = recent_rms_levels[-rms_window_chunks:]
             recent_max_rms = max(recent_rms_levels or [current_rms])
             accepted = recognizer.AcceptWaveform(pcm)
             if accepted:
-                text = Playback_Interrupt_Local_STT_Text(recognizer.Result())
+                text, confidence = Playback_Interrupt_Local_STT_Result(recognizer.Result())
             elif partial_enabled:
-                text = Playback_Interrupt_Local_STT_Text(recognizer.PartialResult(), key="partial")
+                text, confidence = Playback_Interrupt_Local_STT_Result(recognizer.PartialResult(), key="partial")
             else:
                 text = ""
+                confidence = None
             decision_rms = recent_max_rms if accepted else current_rms
-            if text and (min_rms <= 0 or decision_rms >= min_rms) and Playback_Stop_Command_Detected(text):
+            if (
+                text
+                and Playback_Interrupt_Rms_Accepted(
+                    decision_rms,
+                    baseline_rms,
+                    min_rms,
+                    absolute_rms,
+                    spike_ratio,
+                )
+                and Playback_Interrupt_Confidence_Accepted(confidence, min_confidence)
+                and Playback_Stop_Command_Detected(text)
+            ):
                 PRINT("\n-Trinitty:Playback interrupt local STT detected:%s" % text)
+                Print_Playback_Interrupt_Reason(text, rms=decision_rms, confidence=confidence)
                 cancel_operation.put(True)
                 stop_event.set()
                 return True
-            if text and decision_rms < min_rms:
-                PRINT("\n-Trinitty:Playback interrupt local STT ignored low audio:%s rms:%s" % (text, decision_rms))
+            if text and not Playback_Interrupt_Rms_Accepted(
+                decision_rms,
+                baseline_rms,
+                min_rms,
+                absolute_rms,
+                spike_ratio,
+            ):
+                PRINT(
+                    "\n-Trinitty:Playback interrupt local STT ignored low audio:%s rms:%s baseline:%s"
+                    % (text, decision_rms, baseline_rms)
+                )
+            elif text and not Playback_Interrupt_Confidence_Accepted(confidence, min_confidence):
+                PRINT(
+                    "\n-Trinitty:Playback interrupt local STT ignored low confidence:%s confidence:%s"
+                    % (text, confidence)
+                )
         if recognizer is not None and not stop_event.is_set():
-            text = Playback_Interrupt_Local_STT_Text(recognizer.FinalResult())
+            text, confidence = Playback_Interrupt_Local_STT_Result(recognizer.FinalResult())
             recent_max_rms = max(recent_rms_levels or [0.0])
-            if text and (min_rms <= 0 or recent_max_rms >= min_rms) and Playback_Stop_Command_Detected(text):
+            baseline_rms = min(recent_rms_levels) if recent_rms_levels else recent_max_rms
+            if (
+                text
+                and Playback_Interrupt_Rms_Accepted(
+                    recent_max_rms,
+                    baseline_rms,
+                    min_rms,
+                    absolute_rms,
+                    spike_ratio,
+                )
+                and Playback_Interrupt_Confidence_Accepted(confidence, min_confidence)
+                and Playback_Stop_Command_Detected(text)
+            ):
+                Print_Playback_Interrupt_Reason(text, rms=recent_max_rms, confidence=confidence)
                 cancel_operation.put(True)
                 stop_event.set()
                 return True
@@ -8925,6 +9110,7 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
 
 
 def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
+    Ensure_Runtime_Queues()
     if (
         globals().get("INTERPRETOR", False)
         or (not force and not globals().get("PLAYBACK_INTERRUPT_ENABLED", False))
@@ -8955,6 +9141,7 @@ def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
         transcripts, transcripts_confidence, words, words_confidence, err_msg = Speech_To_Text(audio)
         text, recognized = Check_Transcript(transcripts, transcripts_confidence, words, words_confidence, err_msg)
         if recognized and Playback_Stop_Command_Detected(text):
+            Print_Playback_Interrupt_Reason(text, provider="stt")
             cancel_operation.put(True)
             stop_event.set()
             Stop_Recording()
@@ -8966,6 +9153,7 @@ def Playback_Interrupt_Listener(stop_event, timeout=None, force=False):
 
 
 def Start_Playback_Interrupt_Listener(force=False):
+    Ensure_Runtime_Queues()
     if (
         globals().get("INTERPRETOR", False)
         or (not force and not globals().get("PLAYBACK_INTERRUPT_ENABLED", False))
@@ -8981,6 +9169,7 @@ def Start_Playback_Interrupt_Listener(force=False):
 
 
 def Stop_Playback_Interrupt_Listener(listener_info):
+    Ensure_Runtime_Queues()
     if not listener_info:
         return
     stop_event, listener = listener_info
@@ -9088,6 +9277,7 @@ def Play_Response(audio_response=None, stay_awake=False, save_history=True, answ
 
 
 def dbg_queue():
+    Ensure_Runtime_Queues()
 
     PRINT("\n-Trinitty:sleep.empty:%s" % cancel_operation.empty())
     PRINT("\n-Trinitty:start.empty:%s" % wake_me_up.empty())
@@ -9096,6 +9286,7 @@ def dbg_queue():
 
 
 def Start_Thread_Record():
+    Ensure_Runtime_Queues()
     PRINT("\n-Trinitty:start thread rec")
     if not Audio_Input_Available():
         cancel_operation.put(True)
@@ -9114,6 +9305,7 @@ def Start_Thread_Record():
 def Go_Back_To_Sleep(go_trinitty=True):
 
     global Current_Category
+    Ensure_Runtime_Queues()
 
     PRINT("\n\n------\n-Trinitty:Remise en veille-----\n\n")
 
@@ -9138,6 +9330,7 @@ def Go_Back_To_Sleep(go_trinitty=True):
 
 
 def Wait_for(action, timeout=None):
+    Ensure_Runtime_Queues()
     PRINT("\n-Trinitty:wait for %s" % action)
 
     if timeout is None:
@@ -11248,6 +11441,9 @@ def GetConf():
     global PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS
     global PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED
     global PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS
+    global PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR
+    global PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO
+    global PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE
     global WAIT_FOR_TIMEOUT
     global WAIT_FOR_POLL_INTERVAL
     global PLAYBACK_POLL_INTERVAL
@@ -11315,6 +11511,9 @@ def GetConf():
         "PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS",
         "PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED",
         "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS",
+        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR",
+        "PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO",
+        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE",
         "WAIT_FOR_TIMEOUT",
         "WAIT_FOR_POLL_INTERVAL",
         "PLAYBACK_POLL_INTERVAL",
@@ -11454,6 +11653,15 @@ def GetConf():
 
             elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS":
                 PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = Config_Nonnegative_Float(conf, 350.0)
+
+            elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR":
+                PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = Config_Nonnegative_Float(conf, 900.0)
+
+            elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO":
+                PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = Config_Nonnegative_Float(conf, 1.6)
+
+            elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE":
+                PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = Config_Nonnegative_Float(conf, 0.75)
 
             elif option == "WAIT_FOR_TIMEOUT":
                 WAIT_FOR_TIMEOUT = Config_Positive_Float(conf, 30.0)
@@ -11774,7 +11982,10 @@ PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True # True: utilise Vosk local pour dét
 PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute # Mots/phrases d'arrêt séparés par virgule.
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25 # Taille des petits blocs audio analysés par Vosk.
 PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False # True: autorise les résultats partiels Vosk.
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350 # Niveau audio minimal pour accepter une commande stop/arrête.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350 # Niveau audio minimal pour accepter une commande stop/arrête après comparaison avec le bruit ambiant.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 900 # Niveau RMS absolu qui accepte immédiatement une commande stop/arrête.
+PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.6 # Ratio minimal entre la voix détectée et le niveau déjà capté.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.75 # Confiance minimale Vosk si les scores de mots sont disponibles.
 COMMAND_CLASSIFIER_ENABLED = False # True: utiliser le classifieur TensorFlow optionnel.
 COMMAND_CLASSIFIER_THRESHOLD = 0.65 # Score minimal du classifieur pour accepter une commande.
 COMMAND_CLASSIFIER_MODEL_PATH = datas/command_classifier.keras
@@ -12005,6 +12216,9 @@ if __name__ == "__main__":
     PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
     PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
     PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350
+    PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 900
+    PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.6
+    PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.75
     WAKE_WORD_LOCAL_STT_ENABLED = True
     WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
     WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
