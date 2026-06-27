@@ -24,6 +24,7 @@ import sys
 import time
 import traceback
 import unicodedata
+import wave
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import urlopen
 
@@ -1960,6 +1961,8 @@ WAIT_FOR_TIMEOUT = 30.0
 WAIT_FOR_POLL_INTERVAL = 0.05
 PLAYBACK_POLL_INTERVAL = 0.05
 INTERPRETOR_INPUT_TIMEOUT = 120.0
+INTERPRETOR_INPUT_TIMEOUT_MIN = 15.0
+INTERPRETOR_INPUT_TIMEOUT_MARGIN = 10.0
 PLAYBACK_INTERRUPT_TIMEOUT = 30.0
 PLAYBACK_INTERRUPT_ENABLED = False
 PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
@@ -3128,10 +3131,54 @@ def Config_Nonnegative_Float(value, default):
     return parsed if parsed >= 0 else default
 
 
-def Input_With_Timeout(prompt, timeout=None):
+def Audio_File_Duration(filepath):
+    filepath = str(filepath or "").strip()
+    if not filepath or not filepath.lower().endswith(".wav") or not os.path.exists(filepath):
+        return None
+
+    try:
+        with wave.open(filepath, "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            if frame_rate <= 0:
+                return None
+            return wav_file.getnframes() / float(frame_rate)
+    except Exception as e:
+        PRINT("\n-Trinitty:Audio_File_Duration:%s:%s" % (filepath, str(e)))
+        return None
+
+
+def Audio_Files_Total_Duration(audio_paths):
+    total = 0.0
+    found_duration = False
+    for audio_path in audio_paths or []:
+        duration = Audio_File_Duration(audio_path)
+        if duration is None:
+            continue
+        total += duration
+        found_duration = True
+    if not found_duration:
+        return None
+    return total
+
+
+def Interpretor_Input_Timeout(audio_paths=None, timeout=None):
     if timeout is None:
         timeout = globals().get("INTERPRETOR_INPUT_TIMEOUT", 120.0)
     timeout = Config_Nonnegative_Float(timeout, 120.0)
+    if timeout <= 0:
+        return 0.0
+
+    audio_duration = Audio_Files_Total_Duration(audio_paths)
+    if audio_duration is None:
+        return timeout
+
+    min_timeout = Config_Nonnegative_Float(globals().get("INTERPRETOR_INPUT_TIMEOUT_MIN", 15.0), 15.0)
+    margin = Config_Nonnegative_Float(globals().get("INTERPRETOR_INPUT_TIMEOUT_MARGIN", 10.0), 10.0)
+    return max(min_timeout, audio_duration + margin)
+
+
+def Input_With_Timeout(prompt, timeout=None, audio_paths=None):
+    timeout = Interpretor_Input_Timeout(audio_paths=audio_paths, timeout=timeout)
     if timeout <= 0:
         return input(prompt)
 
@@ -7904,10 +7951,18 @@ def Wikipedia(to_search, Title=None, FULL=None):
 
 def Prompt(allowed_functions=None,from_function=None):
     PRINT("\n-Trinitty:Dans la fonction Prompt")
+    prompt_audio_paths = []
     if from_function == "Results_Hub":
-        Play_Audio_File(SCRIPT_PATH + "/local_sounds/question/search_history_cmds.wav")
-    Play_Audio_File(SCRIPT_PATH + "/local_sounds/prompt/2.wav")
-    user_input = Input_With_Timeout("\n-Trinitty:Comment puis-je vous aider ?:").strip()
+        history_prompt = SCRIPT_PATH + "/local_sounds/question/search_history_cmds.wav"
+        prompt_audio_paths.append(history_prompt)
+        Play_Audio_File(history_prompt)
+    prompt_wav = SCRIPT_PATH + "/local_sounds/prompt/2.wav"
+    prompt_audio_paths.append(prompt_wav)
+    Play_Audio_File(prompt_wav)
+    user_input = Input_With_Timeout(
+        "\n-Trinitty:Comment puis-je vous aider ?:",
+        audio_paths=prompt_audio_paths,
+    ).strip()
     if len(str(user_input)) > 2:
 
         cmd = Commandes(user_input,allowed_functions=allowed_functions,from_function=from_function)
@@ -8717,7 +8772,7 @@ def Text_To_Speech(txtinput, stayawake=False, savehistory=True):
 
 def Display_Response_Text(answer_txt):
     if answer_txt is not None and str(answer_txt).strip():
-        print("\nReponse: %s\n" % str(answer_txt).strip())
+        print("\nTrinitty réponse: %s\n" % str(answer_txt).strip())
 
 
 def Concatenate_Wav_Files(wav_files, output_path):
@@ -11448,6 +11503,8 @@ def GetConf():
     global WAIT_FOR_POLL_INTERVAL
     global PLAYBACK_POLL_INTERVAL
     global INTERPRETOR_INPUT_TIMEOUT
+    global INTERPRETOR_INPUT_TIMEOUT_MIN
+    global INTERPRETOR_INPUT_TIMEOUT_MARGIN
     global COMMAND_CLASSIFIER_ENABLED
     global COMMAND_CLASSIFIER_THRESHOLD
     global COMMAND_CLASSIFIER_MODEL_PATH
@@ -11518,6 +11575,8 @@ def GetConf():
         "WAIT_FOR_POLL_INTERVAL",
         "PLAYBACK_POLL_INTERVAL",
         "INTERPRETOR_INPUT_TIMEOUT",
+        "INTERPRETOR_INPUT_TIMEOUT_MIN",
+        "INTERPRETOR_INPUT_TIMEOUT_MARGIN",
         "COMMAND_CLASSIFIER_ENABLED",
         "COMMAND_CLASSIFIER_THRESHOLD",
         "COMMAND_CLASSIFIER_MODEL_PATH",
@@ -11674,6 +11733,12 @@ def GetConf():
 
             elif option == "INTERPRETOR_INPUT_TIMEOUT":
                 INTERPRETOR_INPUT_TIMEOUT = Config_Nonnegative_Float(conf, 120.0)
+
+            elif option == "INTERPRETOR_INPUT_TIMEOUT_MIN":
+                INTERPRETOR_INPUT_TIMEOUT_MIN = Config_Nonnegative_Float(conf, 15.0)
+
+            elif option == "INTERPRETOR_INPUT_TIMEOUT_MARGIN":
+                INTERPRETOR_INPUT_TIMEOUT_MARGIN = Config_Nonnegative_Float(conf, 10.0)
 
             elif option == "COMMAND_CLASSIFIER_ENABLED":
                  COMMAND_CLASSIFIER_ENABLED = Config_Bool(conf, default=False)
@@ -11970,7 +12035,9 @@ GPT4FREE_COOKIES_SYNC_DIR = g4f_cookies/import
 GPT4FREE_AUTO_REJECT_NOTWORKING = True
 GPT4FREE_SUBPROCESS_ENABLED = True # True: isole gpt4free en subprocess pour éviter qu'un segfault tue Trinitty.
 INTERPRETOR = True # True: utiliser le clavier au lieu du micro.
-INTERPRETOR_INPUT_TIMEOUT = 120 # Secondes d'attente en mode clavier; 0 désactive le timeout.
+INTERPRETOR_INPUT_TIMEOUT = 120 # Fallback en secondes si la durée du WAV de prompt est inconnue; 0 désactive le timeout.
+INTERPRETOR_INPUT_TIMEOUT_MIN = 15 # Attente minimale en mode clavier quand la durée du WAV est connue.
+INTERPRETOR_INPUT_TIMEOUT_MARGIN = 10 # Secondes ajoutées à la durée du/des WAV joués avant la saisie clavier.
 PUSH_TO_TALK = False # True: appuyer sur Entrée au lieu du wake word.
 WAKE_WORD_LOCAL_STT_ENABLED = True # True: utilise Vosk comme fallback wake word si Picovoice est absent.
 WAKE_WORD_LOCAL_STT_WORDS = trinitty,trinity,interpréteur,interpreteur,répète,repete,merci # Mots de réveil Vosk séparés par virgule.
@@ -12021,6 +12088,8 @@ XCB_ERROR_FIX = False # True: masque certains avertissements XCB liés à DISPLA
         GPT4FREE_PROBE_TIMEOUT = 15.0
         GPT4FREE_SUBPROCESS_ENABLED = True
         INTERPRETOR_INPUT_TIMEOUT = 120.0
+        INTERPRETOR_INPUT_TIMEOUT_MIN = 15.0
+        INTERPRETOR_INPUT_TIMEOUT_MARGIN = 10.0
         WAKE_WORD_LOCAL_STT_ENABLED = True
         WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
         WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
@@ -12230,6 +12299,8 @@ if __name__ == "__main__":
     WAIT_FOR_POLL_INTERVAL = 0.05
     PLAYBACK_POLL_INTERVAL = 0.05
     INTERPRETOR_INPUT_TIMEOUT = 120.0
+    INTERPRETOR_INPUT_TIMEOUT_MIN = 15.0
+    INTERPRETOR_INPUT_TIMEOUT_MARGIN = 10.0
     COMMAND_CLASSIFIER_ENABLED = False
     COMMAND_CLASSIFIER_THRESHOLD = 0.65
     COMMAND_CLASSIFIER_MODEL_PATH = "datas/command_classifier.keras"

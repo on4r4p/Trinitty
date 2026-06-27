@@ -8,6 +8,7 @@ import re
 import tempfile
 import time
 import unittest
+import wave
 from pathlib import Path
 from queue import Queue
 from types import SimpleNamespace
@@ -22,12 +23,23 @@ def temp_path(name):
     return str(Path(tempfile.gettempdir()) / name)
 
 
+def write_silent_wav(path, seconds=1.0, sample_rate=8000):
+    frames = int(sample_rate * seconds)
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\0\0" * frames)
+
+
 def reset_command_state():
     trinitty.DEBUG = False
     trinitty.CMD_DBG = False
     trinitty.INTERPRETOR = True
     trinitty.PUSH_TO_TALK = False
     trinitty.INTERPRETOR_INPUT_TIMEOUT = 0
+    trinitty.INTERPRETOR_INPUT_TIMEOUT_MIN = 15
+    trinitty.INTERPRETOR_INPUT_TIMEOUT_MARGIN = 10
     trinitty.PLAYBACK_INTERRUPT_ENABLED = False
     trinitty.PLAYBACK_INTERRUPT_TIMEOUT = 30.0
     trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
@@ -266,6 +278,8 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR",
                     "PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO",
                     "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE",
+                    "INTERPRETOR_INPUT_TIMEOUT_MIN",
+                    "INTERPRETOR_INPUT_TIMEOUT_MARGIN",
                     "RESPONSE_STREAMING_ENABLED",
                     "RESPONSE_STREAM_MIN_CHARS",
                     "RESPONSE_STREAM_MAX_CHARS",
@@ -2166,6 +2180,13 @@ class TrinittyRuntimeTests(unittest.TestCase):
             "F_play_audio": ["fichier*audio", "lecture*fichier"],
             "F_add_trigger": ["declencheur*ta base de donnee", "declencher*vos*fonction", "nouvel*activateur"],
             "F_search_web": ["cherche * internet", "fais une recherche * google"],
+            "F_quit": [
+                "éteins-toi",
+                "ferme le programme",
+                "fermer votre application",
+                "arrête trinitty",
+                "quitte trinity",
+            ],
         }
         for function_name, phrases in expected_phrases.items():
             for phrase in phrases:
@@ -2361,6 +2382,55 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertIn(("play", str(ROOT / "local_sounds" / "noinput" / "1.wav")), calls)
         self.assertFalse(trinitty.No_Input.empty())
 
+    def test_interpretor_input_timeout_uses_wav_duration_plus_margin(self):
+        reset_command_state()
+        with tempfile.TemporaryDirectory() as tmp:
+            wav_path = Path(tmp) / "prompt.wav"
+            write_silent_wav(wav_path, seconds=3.0)
+            trinitty.INTERPRETOR_INPUT_TIMEOUT = 120
+            trinitty.INTERPRETOR_INPUT_TIMEOUT_MIN = 5
+            trinitty.INTERPRETOR_INPUT_TIMEOUT_MARGIN = 7
+
+            self.assertAlmostEqual(10.0, trinitty.Interpretor_Input_Timeout(audio_paths=[str(wav_path)]), places=2)
+
+    def test_interpretor_input_timeout_uses_minimum_for_short_wav(self):
+        reset_command_state()
+        with tempfile.TemporaryDirectory() as tmp:
+            wav_path = Path(tmp) / "prompt.wav"
+            write_silent_wav(wav_path, seconds=1.0)
+            trinitty.INTERPRETOR_INPUT_TIMEOUT = 120
+            trinitty.INTERPRETOR_INPUT_TIMEOUT_MIN = 15
+            trinitty.INTERPRETOR_INPUT_TIMEOUT_MARGIN = 3
+
+            self.assertAlmostEqual(15.0, trinitty.Interpretor_Input_Timeout(audio_paths=[str(wav_path)]), places=2)
+
+    def test_interpretor_input_timeout_falls_back_when_wav_duration_unknown(self):
+        reset_command_state()
+        trinitty.INTERPRETOR_INPUT_TIMEOUT = 42
+        self.assertAlmostEqual(
+            42.0,
+            trinitty.Interpretor_Input_Timeout(audio_paths=[temp_path("missing-prompt.wav")]),
+            places=2,
+        )
+
+    def test_input_with_timeout_receives_dynamic_wav_timeout(self):
+        reset_command_state()
+        with tempfile.TemporaryDirectory() as tmp:
+            wav_path = Path(tmp) / "prompt.wav"
+            write_silent_wav(wav_path, seconds=2.0)
+            trinitty.INTERPRETOR_INPUT_TIMEOUT = 120
+            trinitty.INTERPRETOR_INPUT_TIMEOUT_MIN = 5
+            trinitty.INTERPRETOR_INPUT_TIMEOUT_MARGIN = 4
+            calls = []
+            original_select = trinitty.select.select
+            trinitty.select.select = lambda readable, writable, errors, timeout: calls.append(timeout) or ([], [], [])
+            try:
+                self.assertEqual("", trinitty.Input_With_Timeout("prompt:", audio_paths=[str(wav_path)]))
+            finally:
+                trinitty.select.select = original_select
+
+            self.assertEqual([6.0], calls)
+
     def test_load_csv_routes_common_spoken_show_history_requests(self):
         reset_command_state()
         original_paths = {
@@ -2513,16 +2583,17 @@ class TrinittyRuntimeTests(unittest.TestCase):
     def test_command_routes_quit(self):
         reset_command_state()
         calls = []
-        trinitty.Loaded_Actions_Words_Requests = ["ferme"]
-        trinitty.Loaded_Quit_Words_Requests = ["ferme*programme"]
+        trinitty.Loaded_Actions_Words_Requests = ["ferme", "éteins"]
+        trinitty.Loaded_Quit_Words_Requests = ["ferme*programme", "éteins-toi"]
         original_quit = trinitty.Quit
         trinitty.Quit = lambda from_function=None: calls.append(from_function)
         try:
             self.assertTrue(trinitty.Commandes("ferme ton programme"))
+            self.assertTrue(trinitty.Commandes("éteins-toi"))
         finally:
             trinitty.Quit = original_quit
 
-        self.assertEqual([None], calls)
+        self.assertEqual([None, None], calls)
 
     def test_results_hub_command_returns_function_name(self):
         reset_command_state()
@@ -2937,6 +3008,14 @@ class TrinittyRuntimeTests(unittest.TestCase):
             ],
             calls,
         )
+
+    def test_display_response_text_uses_trinitty_label(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            trinitty.Display_Response_Text("bonjour")
+
+        self.assertIn("Trinitty réponse: bonjour", output.getvalue())
+        self.assertNotIn("Reponse:", output.getvalue())
 
     def test_run_playback_command_rejects_raw_string_command(self):
         calls = []
@@ -5747,6 +5826,8 @@ class TrinittyRuntimeTests(unittest.TestCase):
                         "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 888",
                         "PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.4",
                         "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.8",
+                        "INTERPRETOR_INPUT_TIMEOUT_MIN = 6",
+                        "INTERPRETOR_INPUT_TIMEOUT_MARGIN = 4",
                         "TTS_CACHE_ENABLED = False",
                         "TTS_CACHE_DIR = cache/custom-tts",
                         "RESPONSE_STREAMING_ENABLED = False",
@@ -5804,6 +5885,8 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertEqual(888.0, trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR)
             self.assertEqual(1.4, trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO)
             self.assertEqual(0.8, trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE)
+            self.assertEqual(6.0, trinitty.INTERPRETOR_INPUT_TIMEOUT_MIN)
+            self.assertEqual(4.0, trinitty.INTERPRETOR_INPUT_TIMEOUT_MARGIN)
             self.assertFalse(trinitty.TTS_CACHE_ENABLED)
             self.assertEqual("cache/custom-tts", trinitty.TTS_CACHE_DIR)
             self.assertFalse(trinitty.RESPONSE_STREAMING_ENABLED)

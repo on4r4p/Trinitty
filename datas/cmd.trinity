@@ -48,7 +48,7 @@ F_search_web,[fais/faire/lance/lancer] [*/une /des ]recherche{s/} * [internet/go
 F_search_web,[cherche/cherches/cherchez/recherche/recherches/recherchez/trouve/trouves/trouvez/regarde/regardes/regardez/verifie/verifies/verifiez/consulte/consultez] * [internet/google/web]
 F_wait,[me laisser/laiss{e/ez}-moi/attend{s/ez}]*[second{e/es}/minut{e/es}/{un peu de/du/plus de} temps/un peu]
 F_wait,[{mets-/fous-/}toi en {veille/pause}/{mettez/foutez} vous en {veille/pause}/{tais-toi/taisez-vous/ferme-la/fermez-la}]
-F_quit,[{ferme/fermez/quitte/quittez/sors/sortez} {ton/le/la/de/du/ta/votre} {programme/scripte/fonction}]
+F_quit,[{eteins-toi/éteins-toi/eteint-toi/éteint-toi}/{eteins/éteins/eteint/éteint/arrete/arrête/stoppe/ferme/quitte} {toi/}/ferme{r/} {le/la/ton/ta/votre} {programme/scripte/script/application/appli}/quitte{r/} {le/la/ton/ta/votre} {programme/scripte/script/application/appli}/arrete{r/} {le/la/ton/ta/votre} {programme/scripte/script/application/appli}/arrête{r/} {le/la/ton/ta/votre} {programme/scripte/script/application/appli}/{ferme/quitte/arrete/arrête} trinitty/{ferme/quitte/arrete/arrête} trinity]
 F_add_trigger,[declencheur/phrase/activateur/fonction]*[ta/votre] base de donnee
 F_add_trigger,declencher*[tes/vos]*fonction
 F_add_trigger,[nouveau*declencheur/activateur*fonction/nouvel*activateur/nouveau*trigger]

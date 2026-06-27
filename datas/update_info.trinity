@@ -1,8 +1,18 @@
-Version: 0.1.52
-Titre: Stop Vosk restauré, aide moins intrusive et mises à jour mieux ciblées
+Version: 0.1.53
+Titre: Timeout clavier dynamique, fermeture vocale et affichage de réponse clarifié
 Date: 2026-06-27
 
 Résumé:
+Cette mise à jour adapte le délai du mode clavier à la durée du ou des fichiers WAV joués juste avant la saisie. INTERPRETOR_INPUT_TIMEOUT reste le fallback si la durée audio est inconnue, et 0 désactive toujours le timeout. Quand la durée du WAV est connue, Trinitty utilise cette durée plus une marge configurable, avec une attente minimale configurable.
+
+Deux nouvelles variables de configuration accompagnent ce comportement:
+- INTERPRETOR_INPUT_TIMEOUT_MIN = 15
+- INTERPRETOR_INPUT_TIMEOUT_MARGIN = 10
+
+Le texte terminal affiché après la lecture audio utilise maintenant le format demandé: "Trinitty réponse:". L'affichage reste déclenché après la lecture et après Save_History.
+
+La commande vocale de fermeture a été élargie dans cmd.trinity avec la syntaxe spéciale. Trinitty comprend maintenant davantage de formulations comme "éteins-toi", "ferme le programme", "fermer votre application", "arrête Trinitty" ou "quitte Trinity".
+
 Cette mise à jour corrige trois régressions. D'abord, les phrases longues qui finissent par "aide-moi s'il te plaît" ne déclenchent plus l'aide interne de Trinitty. Elles repartent dans le flux normal pour obtenir une vraie réponse à la question posée.
 
 Ensuite, une phrase qui raconte "j'ai essayé sur internet" ne déclenche plus automatiquement une recherche web. Trinitty attend maintenant une intention explicite comme "fais une recherche sur Google" ou "tu peux chercher sur internet".
@@ -66,7 +76,10 @@ Changements principaux:
 - Add_Trigger compare les ambiguïtés avec l'identifiant réel de la fonction sélectionnée;
 - les déclencheurs générés qui ne correspondent qu'à la fonction cible ne sont plus signalés comme ambigus;
 - la réutilisation de l'aide d'ajout conserve l'identifiant interne de fonction, pas le nom affiché;
-- affichage de la réponse au format "Reponse: ..." après lecture et sauvegarde;
+- timeout clavier calculé depuis la durée des WAV de prompt quand elle est connue;
+- ajout de INTERPRETOR_INPUT_TIMEOUT_MIN et INTERPRETOR_INPUT_TIMEOUT_MARGIN;
+- affichage de la réponse au format "Trinitty réponse:" après lecture et sauvegarde;
+- fermeture vocale élargie avec "éteins-toi", "ferme le programme", "arrête Trinitty" et variantes;
 - ajout de tests de régression sur l'ajout de déclencheur et l'ordre lecture, historique, affichage.
 
 Commandes utiles:

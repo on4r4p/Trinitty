@@ -101,7 +101,11 @@ GPT4FREE_SUBPROCESS_ENABLED = True
 INTERPRETOR = False
 # True: utiliser le clavier au lieu du micro.
 INTERPRETOR_INPUT_TIMEOUT = 120
-# Secondes d'attente en mode clavier avant retour en veille. 0 désactive le timeout.
+# Fallback en secondes si la durée du WAV de prompt est inconnue. 0 désactive le timeout.
+INTERPRETOR_INPUT_TIMEOUT_MIN = 15
+# Attente minimale en mode clavier quand la durée du WAV est connue.
+INTERPRETOR_INPUT_TIMEOUT_MARGIN = 10
+# Secondes ajoutées à la durée du/des WAV joués avant la saisie clavier.
 PUSH_TO_TALK = False
 # True: appuyer sur Entrée au lieu d'utiliser le wake word.
 WAKE_WORD_LOCAL_STT_ENABLED = True
