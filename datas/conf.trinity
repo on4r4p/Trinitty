@@ -63,13 +63,13 @@ TTS_CACHE_DIR = cache/tts
 # Dossier du cache TTS relatif au dossier utilisateur Trinitty.
 
 RESPONSE_STREAMING_ENABLED = False
-# True: commence la synthèse vocale dès qu'OpenAI fournit un segment de réponse exploitable. False privilégie une réponse concaténée plus stable.
+# Option conservée pour compatibilité: le streaming par segments WAV est désactivé et ignoré.
 RESPONSE_STREAM_MIN_CHARS = 120
-# Taille minimale d'un segment avant lecture si une ponctuation permet une coupure naturelle.
+# Conservé pour compatibilité avec les anciennes configurations.
 RESPONSE_STREAM_MAX_CHARS = 450
-# Taille maximale d'un segment vocal avant coupure forcée.
+# Conservé pour compatibilité avec les anciennes configurations.
 TTS_PARALLEL_WORKERS = 1
-# Nombre de travailleurs TTS prévus pour la génération par segments. 1 garde un flux prudent sur Raspberry.
+# Nombre de travailleurs TTS conservé pour compatibilité.
 HISTORY_INDEX_ENABLED = True
 # True: indexe l'historique pour éviter un scan complet coûteux à chaque question.
 HISTORY_INDEX_PATH = cache/history_index.json
@@ -116,25 +116,27 @@ WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
 # Taille des blocs micro analysés par Vosk pour le réveil.
 WAKE_WORD_LOCAL_STT_TIMEOUT = 0
 # Secondes d'écoute Vosk wake word. 0 attend sans limite.
-PLAYBACK_INTERRUPT_ENABLED = True
+PLAYBACK_INTERRUPT_ENABLED = False
 # True: écouter les commandes stop/arrête pendant la lecture d'une réponse.
 PLAYBACK_INTERRUPT_TIMEOUT = 30
 # Durée maximale en secondes pour écouter une interruption pendant une lecture.
 PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
 # True: utilise Vosk local pour détecter stop/arrête pendant la lecture si un modèle est disponible.
-PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute
+PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED = False
+# True: autorise la reconnaissance vocale complète si Vosk local est indisponible. False évite les faux positifs au bruit de micro.
+PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête
 # Mots/phrases d'arrêt séparés par virgule pour le détecteur local pendant lecture.
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
 # Taille des petits blocs audio analysés par Vosk pendant la lecture.
 PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
 # True: autorise les résultats partiels Vosk. False réduit fortement les faux positifs.
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700
 # Niveau audio minimal pour accepter une commande stop/arrête après comparaison avec le bruit ambiant.
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 900
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 1400
 # Niveau RMS absolu qui accepte immédiatement une commande stop/arrête si la voix est forte.
-PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.6
+PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 2.4
 # Ratio minimal entre la voix détectée et le niveau déjà capté. Augmenter si le haut-parleur déclenche stop.
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.75
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.85
 # Confiance minimale Vosk pour accepter le mot stop/arrête quand Vosk fournit des scores.
 
 COMMAND_CLASSIFIER_ENABLED = False

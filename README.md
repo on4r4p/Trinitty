@@ -187,12 +187,19 @@ HISTORY_INDEX_ENABLED = True
 HISTORY_INDEX_PATH = cache/history_index.json
 HISTORY_CLASSIFICATION_ENABLED = True
 PLAYBACK_INTERRUPT_ENABLED = False
+PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED = False
+PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête
+PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 1400
+PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 2.4
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.85
 GPT4FREE_SERVERS_STATUS = Active
 ```
 
 `LAST_DIALOG_CONTEXT_ENABLED = True` ajoute à la requête LLM la dernière question récente avec la nouvelle demande. Le modèle doit évaluer la corrélation et ignorer l'ancien contexte s'il n'est pas pertinent. La valeur par défaut est `False` pour éviter qu'un ancien échange influence une nouvelle question sans activation explicite. `LAST_DIALOG_CONTEXT_TTL_SECONDS` règle la durée de validité de ce contexte.
 
-`RESPONSE_STREAMING_ENABLED = True` permet de commencer la synthèse vocale par segments dès qu'OpenAI fournit assez de texte, au lieu d'attendre toute la réponse. La valeur par défaut est `False`, car la réponse concaténée reste plus stable sur Raspberry.
+`RESPONSE_STREAMING_ENABLED` est conservé pour compatibilité avec les anciens fichiers de configuration, mais il est ignoré. Trinitty garde le son d'attente pendant la préparation, puis génère et lit une réponse complète pour éviter les erreurs liées au découpage WAV.
 
 `STT_BAD_WORD_RATIO_MAX` pilote la tolérance aux mots incertains en proportion de la longueur de phrase. `STT_BAD_WORD_COUNT_MAX` n'est plus utilisé.
 
@@ -208,7 +215,7 @@ GPT4FREE_SERVERS_STATUS = Active
 
 `TTS_CACHE_ENABLED = True` évite de régénérer plusieurs fois le même WAV pour le même texte et la même voix. Le cache par défaut est `~/.local/share/Trinitty/cache/tts/`.
 
-`PLAYBACK_INTERRUPT_ENABLED = True` fonctionne aussi en push-to-talk. Pendant la lecture d'une réponse, une commande comme `stop`, `arrête` ou `pause` peut interrompre l'audio.
+`PLAYBACK_INTERRUPT_ENABLED = True` fonctionne aussi en push-to-talk. Pendant la lecture d'une réponse, seules les commandes explicites configurées comme `stop` ou `arrête` interrompent l'audio par défaut. Les résultats partiels Vosk sont désactivés par défaut, les résultats sans score de confiance sont ignorés, et les seuils RMS/confiance sont volontairement élevés pour éviter que la voix de Trinitty ou un bruit de micro coupe ses propres WAV. `PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED = False` empêche aussi de retomber sur une reconnaissance vocale complète quand Vosk local est indisponible.
 
 ## gpt4free
 

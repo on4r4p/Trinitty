@@ -1,8 +1,12 @@
-Version: 0.1.54
-Titre: Son de boot avant wake word et attente en mode interpréteur
+Version: 0.1.55
+Titre: Publication de maintenance du boot et du mode interpréteur
 Date: 2026-06-27
 
 Résumé:
+Cette version de maintenance reprend les corrections 0.1.54 avec un numéro de version incrémenté pour publication. Le comportement attendu reste le même: son de boot après les chargements et avant l'écoute wake word, puis retour vocal immédiat en mode interpréteur après une saisie valide.
+
+Elle renforce aussi le filtrage des commandes de recherche web. Un récit long contenant des passages comme "j'ai essayé sur internet" ou "sur Amazon" n'est plus pris pour une commande `F_search_web` si la phrase ne formule pas explicitement une demande de recherche.
+
 Cette mise à jour déplace le son de boot principal au dernier moment utile: après le chargement de la configuration, des clés, des commandes et des vérifications optionnelles, mais juste avant l'entrée dans la boucle normale de Trinitty.
 
 Concrètement, local_sounds/boot/psx.wav n'est plus joué avant les logs de runtime et CHECK_UPDATE. Il est maintenant lancé seulement dans le chemin normal, immédiatement avant Trinitty(), donc avant que le micro soit ouvert pour écouter le wake word.
@@ -67,6 +71,7 @@ Changements principaux:
 - garde-fou one-shot pour éviter de rejouer local_sounds/boot/psx.wav pendant les retours internes;
 - son d'attente lancé en mode interpréteur dès qu'une saisie valide est terminée;
 - le handle d'attente est réutilisé par To_Gpt pour éviter un double son;
+- les récits longs contenant "sur internet", "sur Google" ou "sur Amazon" ne déclenchent plus F_search_web sans demande explicite;
 - "aide-moi" dans une demande générale ne déclenche plus l'aide de Trinitty;
 - les récits du type "j'ai essayé sur internet" ne déclenchent plus F_search_web;
 - interruption Vosk restaurée pour les voix moins fortes mais clairement plus proches que le haut-parleur;

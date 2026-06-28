@@ -43,13 +43,14 @@ def reset_command_state():
     trinitty.PLAYBACK_INTERRUPT_ENABLED = False
     trinitty.PLAYBACK_INTERRUPT_TIMEOUT = 30.0
     trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_ENABLED = True
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête,pause,tais toi,taisez vous,chut,chute"
+    trinitty.PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED = False
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête"
     trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
     trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 900
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.6
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.75
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 1400
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 2.4
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.85
     trinitty.WAKE_WORD_LOCAL_STT_ENABLED = True
     trinitty.WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
     trinitty.WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
@@ -100,6 +101,7 @@ def reset_command_state():
     trinitty.PREPROCESS_CACHE = trinitty.OrderedDict()
     trinitty.HISTORY_INDEX_CACHE = None
     trinitty.HISTORY_INDEX_SIGNATURE = None
+    trinitty.HISTORY_REJECTED_MATCHES = trinitty.OrderedDict()
     trinitty.COMMAND_TRIGGER_INDEX = {}
     trinitty.COMMAND_TRIGGER_INDEX_SIGNATURE = None
     trinitty.SCRIPT_INDEX_CACHE = None
@@ -161,6 +163,18 @@ def reset_runtime_queues():
     trinitty.wake_me_up = Queue()
     trinitty.cancel_operation = Queue()
     trinitty.awake = Queue()
+
+
+def load_default_command_files():
+    datas = ROOT / "datas"
+    trinitty.SCRIPT_PATH = str(ROOT)
+    trinitty.CMDFILE = str(datas / "cmd.trinity")
+    trinitty.ALTFILE = str(datas / "alt_cmd.trinity")
+    trinitty.TRIFILE = str(datas / "alt_trigger.trinity")
+    trinitty.ACTFILE = str(datas / "action.trinity")
+    trinitty.PREFILE = str(datas / "prefix.trinity")
+    trinitty.SYNFILE = str(datas / "synonym.trinity")
+    return trinitty.Load_Csv()
 
 
 class TrinittyRuntimeTests(unittest.TestCase):
@@ -274,6 +288,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                     "STT_DEBUG",
                     "STT_LOCAL_FALLBACK_ENABLED",
                     "TTS_CACHE_ENABLED",
+                    "PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED",
                     "PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED",
                     "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS",
                     "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR",
@@ -379,13 +394,21 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertFalse(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
             self.assertEqual("PLAYBACK_INTERRUPT_ENABLED = True # custom local choice\n", user_conf.read_text())
 
-    def test_migrate_user_config_restores_playback_interrupt_min_rms_default(self):
+    def test_migrate_user_config_raises_generated_playback_interrupt_min_rms_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             user_conf = Path(tmp) / "conf.trinity"
             user_conf.write_text("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 900\n")
 
             self.assertTrue(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
-            self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350", user_conf.read_text())
+            self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700", user_conf.read_text())
+
+    def test_migrate_user_config_raises_previous_playback_interrupt_min_rms_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            user_conf = Path(tmp) / "conf.trinity"
+            user_conf.write_text("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350\n")
+
+            self.assertTrue(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
+            self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700", user_conf.read_text())
 
     def test_migrate_user_config_keeps_custom_playback_interrupt_min_rms(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1323,6 +1346,32 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertFalse(trinitty.Detect_Web_Search_Request(phrase))
         self.assertFalse(trinitty.Commandes(phrase, from_function="audit"))
+
+    def test_web_search_command_does_not_capture_long_package_story(self):
+        reset_command_state()
+        reset_runtime_queues()
+        phrase = (
+            "Je viens de recevoir un colis de la part de Amazon. Alors c'est vrai que je dois recevoir "
+            "des colis dans la semaine mais le colis que j'ai reçu en fait ne ressemble pas du tout un truc "
+            "que j'ai acheté, il y a plein de codes barres dessus, il y a plein de numéros. J'ai essayé sur "
+            "internet de taper ça sur Amazon. Ça ne trouvera rien. J'ai regardé sur cette des discours. "
+            "J'ai regardé sur rien d'autre. En fait. C'est soit c'est des discours soit le fournisseur "
+            "c'est Amazon. Donc voilà, je sais pas comment renvoyer ce truc parce que en fait c'est plein "
+            "de pics pour barbecue et moi j'en ai trop pas besoin."
+        )
+        calls = []
+        original_google = trinitty.Google
+        trinitty.Google = lambda *args, **kwargs: calls.append((args, kwargs)) or True
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(load_default_command_files())
+                self.assertFalse(trinitty.Detect_Web_Search_Request(phrase))
+                self.assertFalse(trinitty.Search_Web_Command_Is_Specific(phrase))
+                self.assertFalse(trinitty.Commandes(phrase))
+        finally:
+            trinitty.Google = original_google
+
+        self.assertEqual([], calls)
 
     def test_web_search_command_still_detects_explicit_requests(self):
         reset_command_state()
@@ -3110,6 +3159,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
         reset_runtime_queues()
         trinitty.INTERPRETOR = False
         trinitty.PLAYBACK_INTERRUPT_ENABLED = True
+        trinitty.PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED = True
         trinitty.Loaded_Actions_Words_Requests = ["arrete"]
         trinitty.Loaded_Wait_Words_Requests = ["arrete"]
         trinitty.audio_datas.put(b"audio")
@@ -3130,12 +3180,36 @@ class TrinittyRuntimeTests(unittest.TestCase):
         self.assertFalse(trinitty.cancel_operation.empty())
         self.assertEqual(["start", "stop"], calls)
 
+    def test_playback_interrupt_listener_does_not_use_full_stt_fallback_by_default(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+        trinitty.PLAYBACK_INTERRUPT_ENABLED = True
+        calls = []
+        original_local = trinitty.Playback_Interrupt_Local_STT_Listener
+        original_start = trinitty.Start_Thread_Record
+        trinitty.Playback_Interrupt_Local_STT_Listener = lambda *_args, **_kwargs: None
+        trinitty.Start_Thread_Record = lambda: calls.append("start")
+        try:
+            self.assertFalse(trinitty.Playback_Interrupt_Listener(trinitty.Event(), timeout=0.1))
+        finally:
+            trinitty.Playback_Interrupt_Local_STT_Listener = original_local
+            trinitty.Start_Thread_Record = original_start
+
+        self.assertEqual([], calls)
+        self.assertTrue(trinitty.cancel_operation.empty())
+
     def test_playback_stop_command_detects_direct_stop_words(self):
         reset_command_state()
 
         self.assertTrue(trinitty.Playback_Stop_Command_Detected("stop"))
         self.assertTrue(trinitty.Playback_Stop_Command_Detected("arrête"))
-        self.assertTrue(trinitty.Playback_Stop_Command_Detected("chute"))
+
+    def test_playback_stop_command_does_not_treat_pause_as_default_stop_word(self):
+        reset_command_state()
+
+        self.assertFalse(trinitty.Playback_Stop_Command_Detected("pause"))
+        self.assertFalse(trinitty.Playback_Stop_Command_Detected("chute"))
         self.assertFalse(trinitty.Playback_Stop_Command_Detected("continue"))
 
     def test_playback_interrupt_local_stt_cancels_playback(self):
@@ -3152,7 +3226,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 return True
 
             def Result(self):
-                return '{"text": "arrête"}'
+                return '{"text": "arrête", "result": [{"word": "arrête", "conf": 0.95}]}'
 
             def FinalResult(self):
                 return "{}"
@@ -3212,7 +3286,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 return len(reads) >= 2
 
             def Result(self):
-                return '{"text": "arrête"}'
+                return '{"text": "arrête", "result": [{"word": "arrête", "conf": 0.95}]}'
 
             def FinalResult(self):
                 return "{}"
@@ -3268,10 +3342,10 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 return True
 
             def Result(self):
-                return '{"text": "arrête"}'
+                return '{"text": "arrête", "result": [{"word": "arrête", "conf": 0.95}]}'
 
             def FinalResult(self):
-                return '{"text": "arrête"}'
+                return '{"text": "arrête", "result": [{"word": "arrête", "conf": 0.95}]}'
 
         class FakeStream:
             def read(self, frame_length, exception_on_overflow=False):
@@ -3369,7 +3443,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 return True
 
             def Result(self):
-                return '{"text": "arrête"}'
+                return '{"text": "arrête", "result": [{"word": "arrête", "conf": 0.95}]}'
 
             def FinalResult(self):
                 return "{}"
@@ -3420,7 +3494,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 return True
 
             def Result(self):
-                return '{"text": "arrête"}'
+                return '{"text": "arrête", "result": [{"word": "arrête", "conf": 0.95}]}'
 
             def FinalResult(self):
                 return "{}"
@@ -3474,7 +3548,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 return len(reads) >= 2
 
             def Result(self):
-                return '{"text": "arrête"}'
+                return '{"text": "arrête", "result": [{"word": "arrête", "conf": 0.95}]}'
 
             def FinalResult(self):
                 return "{}"
@@ -3529,6 +3603,55 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
             def Result(self):
                 return '{"text": "arrête", "result": [{"word": "arrête", "conf": 0.42}]}'
+
+            def FinalResult(self):
+                return "{}"
+
+        class FakeStream:
+            def read(self, frame_length, exception_on_overflow=False):
+                stop_event.set()
+                return b"\xff\x7f" * frame_length
+
+            def close(self):
+                pass
+
+        class FakePyAudio:
+            def open(self, **_kwargs):
+                return FakeStream()
+
+            def terminate(self):
+                pass
+
+        original_vosk = trinitty.vosk
+        original_pyaudio = trinitty.pyaudio
+        original_get_model = trinitty.Get_Vosk_Model
+        trinitty.vosk = SimpleNamespace(KaldiRecognizer=FakeRecognizer)
+        trinitty.pyaudio = SimpleNamespace(PyAudio=lambda: FakePyAudio(), paInt16=8)
+        trinitty.Get_Vosk_Model = lambda: "model"
+        try:
+            self.assertFalse(trinitty.Playback_Interrupt_Local_STT_Listener(stop_event, timeout=1))
+        finally:
+            trinitty.vosk = original_vosk
+            trinitty.pyaudio = original_pyaudio
+            trinitty.Get_Vosk_Model = original_get_model
+
+        self.assertTrue(trinitty.cancel_operation.empty())
+
+    def test_playback_interrupt_local_stt_ignores_missing_confidence(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+        stop_event = trinitty.Event()
+
+        class FakeRecognizer:
+            def __init__(self, *_args):
+                pass
+
+            def AcceptWaveform(self, _pcm):
+                return True
+
+            def Result(self):
+                return '{"text": "arrête"}'
 
             def FinalResult(self):
                 return "{}"
@@ -3722,7 +3845,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             calls,
         )
 
-    def test_playback_interrupt_listener_can_run_in_push_to_talk_when_enabled(self):
+    def test_playback_interrupt_listener_does_not_start_full_stt_in_push_to_talk_by_default(self):
         reset_command_state()
         reset_runtime_queues()
         trinitty.INTERPRETOR = False
@@ -3739,7 +3862,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Start_Thread_Record = original_start
             trinitty.Stop_Recording = original_stop
 
-        self.assertEqual(["start", "stop"], calls)
+        self.assertEqual([], calls)
 
     def test_results_hub_voice_quit_exits_loop(self):
         reset_command_state()
@@ -4065,6 +4188,57 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 ) = originals
 
             self.assertIn("known.wav", calls)
+
+    def test_check_history_does_not_replay_rejected_match_again(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.SCRIPT_PATH = str(ROOT)
+        trinitty.Current_Category = ["cat"]
+        trinitty.Loaded_History_List = [
+            {
+                "hist_file": "cat",
+                "hist_cats": "cat",
+                "hist_input_full": "question",
+                "hist_input_short": "question",
+                "hist_output": "reponse differente",
+                "hist_output_wav": "known.wav",
+            }
+        ]
+        calls = []
+        originals = (
+            trinitty.preprocess,
+            trinitty.similar,
+            trinitty.Play_Audio_File,
+            trinitty.Start_Thread_Record,
+            trinitty.Wait_for,
+            trinitty.Speech_To_Text,
+            trinitty.Check_Transcript,
+        )
+        trinitty.preprocess = lambda value: value
+        trinitty.similar = lambda left, right: 1.0 if (left, right) == ("question", "question") else 0.0
+        trinitty.Play_Audio_File = lambda path: calls.append(path) or 0
+        trinitty.Start_Thread_Record = lambda: True
+        trinitty.Wait_for = lambda what, **_kwargs: what == "audio"
+        trinitty.Speech_To_Text = lambda _audio: (["non"], [1.0], [], [], "")
+        trinitty.Check_Transcript = lambda *_args: ("non", 1.0)
+        trinitty.audio_datas.put(b"audio")
+        try:
+            self.assertFalse(trinitty.Check_History("question"))
+            calls.clear()
+            self.assertFalse(trinitty.Check_History("question"))
+        finally:
+            (
+                trinitty.preprocess,
+                trinitty.similar,
+                trinitty.Play_Audio_File,
+                trinitty.Start_Thread_Record,
+                trinitty.Wait_for,
+                trinitty.Speech_To_Text,
+                trinitty.Check_Transcript,
+            ) = originals
+
+        self.assertNotIn("known.wav", calls)
+        self.assertNotIn(str(ROOT / "local_sounds/already/1.wav"), calls)
 
     def test_check_history_falls_back_to_nocat_when_classify_leaves_category_empty(self):
         reset_command_state()
@@ -4910,7 +5084,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             calls,
         )
 
-    def test_to_gpt_uses_streaming_before_nonstreaming_openai(self):
+    def test_to_gpt_ignores_streaming_config_and_uses_nonstreaming_openai(self):
         reset_command_state()
         reset_runtime_queues()
         trinitty.GPT4FREE_SERVERS_STATUS = False
@@ -4923,6 +5097,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             trinitty.Openai_Gpt_Stream,
             trinitty.Text_To_Speech_Streamed,
             trinitty.Openai_Gpt,
+            trinitty.Text_To_Speech,
         )
         trinitty.Start_Wait_Response_Audio = lambda: calls.append("wait-start") or "wait-handle"
         trinitty.Stop_Wait_Response_Audio = lambda handle: calls.append(("wait-stop", handle))
@@ -4936,8 +5111,9 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         trinitty.Text_To_Speech_Streamed = fake_streamed
         trinitty.Openai_Gpt = lambda _text: calls.append("openai") or "reponse"
+        trinitty.Text_To_Speech = lambda text, stayawake=False: calls.append(("tts", text, stayawake)) or "tts"
         try:
-            self.assertEqual("streamed", trinitty.To_Gpt("question"))
+            self.assertEqual("tts", trinitty.To_Gpt("question"))
         finally:
             (
                 trinitty.Start_Wait_Response_Audio,
@@ -4946,15 +5122,16 @@ class TrinittyRuntimeTests(unittest.TestCase):
                 trinitty.Openai_Gpt_Stream,
                 trinitty.Text_To_Speech_Streamed,
                 trinitty.Openai_Gpt,
+                trinitty.Text_To_Speech,
             ) = originals
 
         self.assertEqual(
             [
                 "wait-start",
                 "history",
-                ("stream", "question"),
-                ("streamed-tts", ["segment"], False, True),
+                "openai",
                 ("wait-stop", "wait-handle"),
+                ("tts", "reponse", False),
             ],
             calls,
         )
@@ -5880,6 +6057,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
                         "READ_LINK_MIN_CHARS = 111",
                         "READ_LINK_MAX_CHARS = 2222",
                         "PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = True",
+                        "PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED = True",
                         "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 999",
                         "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 888",
                         "PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.4",
@@ -5939,6 +6117,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             self.assertEqual(111, trinitty.READ_LINK_MIN_CHARS)
             self.assertEqual(2222, trinitty.READ_LINK_MAX_CHARS)
             self.assertTrue(trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED)
+            self.assertTrue(trinitty.PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED)
             self.assertEqual(999.0, trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS)
             self.assertEqual(888.0, trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR)
             self.assertEqual(1.4, trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO)
