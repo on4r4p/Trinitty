@@ -1,107 +1,24 @@
-Version: 0.1.55
-Titre: Publication de maintenance du boot et du mode interpréteur
-Date: 2026-06-27
+Version: 0.1.56
+Titre: Correction du mode interpréteur et du stop vocal
+Date: 2026-07-01
 
 Résumé:
-Cette version de maintenance reprend les corrections 0.1.54 avec un numéro de version incrémenté pour publication. Le comportement attendu reste le même: son de boot après les chargements et avant l'écoute wake word, puis retour vocal immédiat en mode interpréteur après une saisie valide.
+Cette version corrige le comportement du mode interpréteur et durcit l'interruption vocale pendant la lecture. Quand l'utilisateur demande l'interpréteur, le clavier, le prompt ou l'invite de commande, Trinitty bascule maintenant réellement en mode clavier persistant au lieu d'ouvrir une saisie ponctuelle puis de revenir à l'écoute micro.
 
-Elle renforce aussi le filtrage des commandes de recherche web. Un récit long contenant des passages comme "j'ai essayé sur internet" ou "sur Amazon" n'est plus pris pour une commande `F_search_web` si la phrase ne formule pas explicitement une demande de recherche.
-
-Cette mise à jour déplace le son de boot principal au dernier moment utile: après le chargement de la configuration, des clés, des commandes et des vérifications optionnelles, mais juste avant l'entrée dans la boucle normale de Trinitty.
-
-Concrètement, local_sounds/boot/psx.wav n'est plus joué avant les logs de runtime et CHECK_UPDATE. Il est maintenant lancé seulement dans le chemin normal, immédiatement avant Trinitty(), donc avant que le micro soit ouvert pour écouter le wake word.
-
-Un garde-fou one-shot empêche aussi de rejouer ce son par erreur pendant les retours internes vers la veille.
-
-En mode interpréteur, après une saisie valide de plus de deux caractères, Trinitty lance maintenant le son d'attente avant de chercher une commande ou de partir vers OpenAI. Cela donne un retour vocal immédiat du type "ok, j'effectue votre recherche" au lieu de rester silencieuse pendant le traitement.
-
-Si la phrase n'est pas une commande, ce même son d'attente est transmis au flux GPT au lieu d'en lancer un second. Si la phrase est vide ou trop courte, aucun son d'attente n'est joué.
-
-Cette mise à jour adapte le délai du mode clavier à la durée du ou des fichiers WAV joués juste avant la saisie. INTERPRETOR_INPUT_TIMEOUT reste le fallback si la durée audio est inconnue, et 0 désactive toujours le timeout. Quand la durée du WAV est connue, Trinitty utilise cette durée plus une marge configurable, avec une attente minimale configurable.
-
-Deux nouvelles variables de configuration accompagnent ce comportement:
-- INTERPRETOR_INPUT_TIMEOUT_MIN = 15
-- INTERPRETOR_INPUT_TIMEOUT_MARGIN = 10
-
-Le texte terminal affiché après la lecture audio utilise maintenant le format demandé: "Trinitty réponse:". L'affichage reste déclenché après la lecture et après Save_History.
-
-La commande vocale de fermeture a été élargie dans cmd.trinity avec la syntaxe spéciale. Trinitty comprend maintenant davantage de formulations comme "éteins-toi", "ferme le programme", "fermer votre application", "arrête Trinitty" ou "quitte Trinity".
-
-Cette mise à jour corrige trois régressions. D'abord, les phrases longues qui finissent par "aide-moi s'il te plaît" ne déclenchent plus l'aide interne de Trinitty. Elles repartent dans le flux normal pour obtenir une vraie réponse à la question posée.
-
-Ensuite, une phrase qui raconte "j'ai essayé sur internet" ne déclenche plus automatiquement une recherche web. Trinitty attend maintenant une intention explicite comme "fais une recherche sur Google" ou "tu peux chercher sur internet".
-
-Enfin, l'interruption vocale pendant la lecture accepte de nouveau les mots "stop" ou "arrête" quand la voix est moins forte mais forme un pic clair par rapport au niveau déjà capté. Le seuil absolu reste utile pour une voix forte, mais il ne bloque plus systématiquement les micros cravate dont le niveau RMS est plus bas.
-
-Cette mise à jour rend aussi l'interruption vocale pendant la lecture plus lisible. Le détecteur local Vosk utilise une confiance minimale quand Vosk fournit des scores de mots. Cela réduit les faux arrêts quand le haut-parleur de Trinitty est repris faiblement par le micro cravate.
-
-Si le fichier local contenait encore l'ancien seuil par défaut PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 900, Trinitty le migre vers 350 au prochain lancement. Les valeurs personnalisées différentes restent conservées.
-
-Quand une lecture est réellement interrompue par un mot clé comme "stop" ou "arrête", Trinitty affiche maintenant la raison même avec DEBUG=False, par exemple avec le mot détecté, le niveau RMS et la confiance disponible. Cela permet de distinguer un arrêt volontaire d'une coupure liée à une détection locale.
-
-Nouvelles variables de configuration:
-- PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 900
-- PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 1.6
-- PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.75
-
-Cette mise à jour élargit les formulations vocales reconnues pour demander les informations de mise à jour. Une phrase comme "Tu peux me donner les infos sur ta mise à jour s'il te plaît" est maintenant couverte par cmd.trinity avec la syntaxe spéciale, sans devoir citer explicitement Trinitty.
-
-Les possessifs qui visent directement l'assistant, comme "ta mise à jour", "votre mise à jour", "ton changelog" ou "tes nouveautés", sont maintenant traités comme une référence explicite à Trinitty. Dans ces cas, Trinitty donne directement les informations de mise à jour au lieu de redemander une confirmation.
-
-La couverture accepte davantage de verbes et de noms courants: donner, afficher, lister, montrer, expliquer, parler, raconter, informer, détailler, résumer, ainsi que info, infos, informations, notes, changelog, récapitulatif et nouveautés. Elle couvre aussi les demandes du type "ce qui change", "qu'apporte la mise à jour", "changements", "modifs", "corrections" et "améliorations".
-
-Elle conserve la détection plus fine du garde-fou des demandes de mise à jour. Les formulations génériques comme "donne des informations sur la dernière mise à jour", "affiche le changelog" ou "quelle est la dernière version" sont reconnues comme ambiguës: Trinitty demande alors si la question parle bien d'elle.
-
-En revanche, si la phrase contient un sujet externe clair, comme "mise à jour de Windows", "mise à jour Minecraft", "changelog de Python" ou "infos sur Windows mise à jour", Trinitty ne lance pas sa commande interne. La demande repart dans le flux normal pour pouvoir être traitée comme une question ou une recherche sur ce sujet.
-
-Cette mise à jour conserve aussi le garde-fou précédent. Quand une phrase comme "quoi de neuf avec cette mise à jour" ne précise pas Trinitty, l'assistant demande si la question parle bien de sa propre mise à jour. Si la réponse est oui, la commande d'information Trinitty est lancée. Si la réponse est non ou reste incertaine, la phrase reprend le flux normal.
-
-Un nouveau déclencheur large a aussi été ajouté dans alt_cmd.trinity avec la syntaxe spéciale. Il couvre plusieurs formulations autour de "mise à jour", "dernière version", "changelog", "quoi de neuf" et "quoi de nouveau", tout en gardant un marqueur Trinitty, Trinity, assistant ou programme pour éviter de capturer directement les mises à jour d'autres sujets.
-
-Les déclencheurs alternatifs répétitifs liés à l'historique et à l'aide ont été compactés avec la même syntaxe spéciale. Les variantes "montre-moi l'historique", "affiche moi l'historique", "tu peux m'afficher l'historique", "recherche dans l'historique" ou "efface la dernière entrée de l'historique" restent couvertes, mais avec moins de lignes à maintenir.
-
-Le fichier principal cmd.trinity a été compacté de la même manière. Les familles de commandes nom, signification, créateur, aide, mise à jour, prompt, script, choix aléatoire, répète, historique, lecture audio, recherche web et ajout de déclencheur utilisent maintenant davantage la syntaxe spéciale. Le gros bloc de recherche web a aussi été réduit pour éviter des milliers d'expansions inutiles au démarrage.
-
-Elle corrige enfin deux comportements visibles. D'abord, l'ajout d'un nouveau déclencheur ne considère plus la fonction que l'utilisateur est justement en train d'enrichir comme une ambiguïté bloquante. Le cas des déclencheurs de mise à jour, comme "donne les informations mise a jour trinitty", peut maintenant être validé même s'il correspond déjà à la fonction Trinitty_Update_Info.
-
-Ensuite, l'affichage du texte de réponse est déclenché directement après la lecture audio et après Save_History. Cela évite que le retour en veille empêche l'affichage de la réponse complète.
+Elle relève aussi les seuils Vosk utilisés pour détecter "stop" ou "arrête" pendant une lecture. Les anciennes valeurs générées trop permissives sont migrées automatiquement, les résultats locaux Vosk doivent avoir une confiance plus élevée, et l'interruption locale n'accepte plus les phrases longues ou ambiguës comme commande d'arrêt. Un faux positif du type "stop" avec RMS 991 et confiance 0.89 est désormais ignoré.
 
 Changements principaux:
-- son de boot principal joué après les chargements, juste avant la première écoute wake word;
-- garde-fou one-shot pour éviter de rejouer local_sounds/boot/psx.wav pendant les retours internes;
-- son d'attente lancé en mode interpréteur dès qu'une saisie valide est terminée;
-- le handle d'attente est réutilisé par To_Gpt pour éviter un double son;
-- les récits longs contenant "sur internet", "sur Google" ou "sur Amazon" ne déclenchent plus F_search_web sans demande explicite;
-- "aide-moi" dans une demande générale ne déclenche plus l'aide de Trinitty;
-- les récits du type "j'ai essayé sur internet" ne déclenchent plus F_search_web;
-- interruption Vosk restaurée pour les voix moins fortes mais clairement plus proches que le haut-parleur;
-- migration locale de l'ancien seuil stop PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 900 vers 350;
-- ratio de pic RMS ajouté pour distinguer la voix directe d'une fuite audio de haut-parleur;
-- score de confiance Vosk pris en compte quand il est disponible;
-- affichage de la raison d'interruption de lecture même sans DEBUG=True;
-- cmd.trinity couvre davantage de variantes de demande d'information sur la mise à jour;
-- "ta mise à jour", "votre mise à jour", "ton changelog" et "tes nouveautés" ne demandent plus de confirmation;
-- cmd.trinity couvre aussi les formulations "ce qui change", "qu'apporte", "modifs", "corrections" et "améliorations";
-- la politesse finale comme "s'il te plaît" n'est plus prise pour un sujet externe;
-- distinction entre demande générique de mise à jour et demande scoped sur un autre sujet;
-- les sujets explicites comme Windows, Minecraft ou Python ne déclenchent plus Trinitty_Update_Info;
-- le garde-fou s'applique aussi aux déclencheurs chargés depuis cmd.trinity, pas seulement au détecteur direct;
-- confirmation vocale pour les demandes génériques de mise à jour avant de lancer Trinitty_Update_Info;
-- les demandes explicites qui citent Trinitty, Trinity, l'assistant ou le programme ne demandent pas de confirmation;
-- un refus ou une réponse incertaine laisse la demande repartir dans le flux normal;
-- ajout d'un déclencheur alt_cmd.trinity en syntaxe spéciale pour couvrir davantage de formulations de mise à jour;
-- compactage des déclencheurs alt_cmd.trinity pour l'historique, la recherche historique, l'aide et la suppression de dernière entrée;
-- compactage de cmd.trinity et réduction du nombre d'expansions de recherche web;
-- Add_Trigger compare les ambiguïtés avec l'identifiant réel de la fonction sélectionnée;
-- les déclencheurs générés qui ne correspondent qu'à la fonction cible ne sont plus signalés comme ambigus;
-- la réutilisation de l'aide d'ajout conserve l'identifiant interne de fonction, pas le nom affiché;
-- timeout clavier calculé depuis la durée des WAV de prompt quand elle est connue;
-- ajout de INTERPRETOR_INPUT_TIMEOUT_MIN et INTERPRETOR_INPUT_TIMEOUT_MARGIN;
-- affichage de la réponse au format "Trinitty réponse:" après lecture et sauvegarde;
-- fermeture vocale élargie avec "éteins-toi", "ferme le programme", "arrête Trinitty" et variantes;
-- ajout de tests de régression sur l'ajout de déclencheur et l'ordre lecture, historique, affichage.
+- bump de version en 0.1.56;
+- demande vocale "interpréteur", "clavier", "prompt" ou "invite de commande" traitée comme une bascule clavier persistante;
+- wake word local "interpréteur" raccordé à la même bascule persistante;
+- PUSH_TO_TALK désactivé quand le mode interpréteur est activé depuis une commande;
+- seuils par défaut de l'interruption Vosk relevés: RMS minimum 1200, floor 2200, ratio de pic 3.2 et confiance 0.95;
+- migration automatique des anciennes valeurs générées PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS, PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR, PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO et PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE;
+- interruption locale Vosk limitée aux commandes directes exactes comme "stop" ou "arrête";
+- ajout de tests de régression pour le mode interpréteur persistant, le wake word interpréteur, la migration des seuils et le faux positif stop RMS 991 / confiance 0.89.
 
 Commandes utiles:
 - trinitty --update-info
-- dites: "informations de mise à jour de Trinitty"
-- dites: "quoi de neuf avec cette mise à jour", puis confirmez si la question concerne Trinitty
+- dites: "ouvre l'interpréteur"
+- dites: "est-ce que tu peux m'afficher l'interpréteur"
+- dites "stop" ou "arrête" clairement pour interrompre une lecture.
