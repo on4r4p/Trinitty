@@ -47,10 +47,10 @@ def reset_command_state():
     trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête"
     trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
     trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 1400
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 2.4
-    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.85
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 1200
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 2200
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 3.2
+    trinitty.PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.95
     trinitty.WAKE_WORD_LOCAL_STT_ENABLED = True
     trinitty.WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
     trinitty.WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
@@ -400,7 +400,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
             user_conf.write_text("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 900\n")
 
             self.assertTrue(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
-            self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700", user_conf.read_text())
+            self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 1200", user_conf.read_text())
 
     def test_migrate_user_config_raises_previous_playback_interrupt_min_rms_default(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -408,7 +408,30 @@ class TrinittyRuntimeTests(unittest.TestCase):
             user_conf.write_text("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 350\n")
 
             self.assertTrue(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
-            self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700", user_conf.read_text())
+            self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 1200", user_conf.read_text())
+
+    def test_migrate_user_config_raises_current_playback_interrupt_generated_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            user_conf = Path(tmp) / "conf.trinity"
+            user_conf.write_text(
+                "\n".join(
+                    [
+                        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700",
+                        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 1400",
+                        "PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 2.4",
+                        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.85",
+                    ]
+                )
+                + "\n"
+            )
+
+            self.assertTrue(trinitty.Migrate_User_Config_Defaults(str(user_conf)))
+            migrated = user_conf.read_text()
+
+        self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 1200", migrated)
+        self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 2200", migrated)
+        self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 3.2", migrated)
+        self.assertIn("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.95", migrated)
 
     def test_migrate_user_config_keeps_custom_playback_interrupt_min_rms(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2309,6 +2332,54 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertEqual(["show-history"], calls)
 
+    def test_command_interpretor_request_enables_persistent_keyboard_mode(self):
+        reset_command_state()
+        trinitty.INTERPRETOR = False
+        trinitty.PUSH_TO_TALK = True
+        trinitty.Loaded_Prompt_Requests = ["interpreteur"]
+        calls = []
+        original_prompt = trinitty.Prompt
+        trinitty.Prompt = lambda allowed_functions=None, from_function=None: calls.append(
+            (allowed_functions, from_function)
+        ) or "prompt"
+        try:
+            self.assertTrue(trinitty.Commandes("est-ce que tu peux m'afficher l'interpreteur"))
+        finally:
+            trinitty.Prompt = original_prompt
+
+        self.assertTrue(trinitty.INTERPRETOR)
+        self.assertFalse(trinitty.PUSH_TO_TALK)
+        self.assertEqual([(None, None)], calls)
+        self.assertFalse(trinitty.Interpretor_Mode_Request("quel est le meilleur clavier mecanique"))
+
+    def test_local_wake_word_interpretor_enables_persistent_keyboard_mode(self):
+        reset_command_state()
+        trinitty.INTERPRETOR = False
+        trinitty.PUSH_TO_TALK = True
+        calls = []
+        original_local_wake_word = trinitty.Local_Wake_Word
+        original_prompt = trinitty.Prompt
+        trinitty.Local_Wake_Word = lambda timeout=None: 1
+        trinitty.Prompt = lambda allowed_functions=None, from_function=None: calls.append(
+            (allowed_functions, from_function)
+        ) or "prompt"
+        try:
+            self.assertEqual(
+                "prompt",
+                trinitty.Local_Wake_Word_Loop(
+                    timeout=0.1,
+                    allowed_functions=["F_quit"],
+                    from_function="Results_Hub",
+                ),
+            )
+        finally:
+            trinitty.Local_Wake_Word = original_local_wake_word
+            trinitty.Prompt = original_prompt
+
+        self.assertTrue(trinitty.INTERPRETOR)
+        self.assertFalse(trinitty.PUSH_TO_TALK)
+        self.assertEqual([(["F_quit"], "Results_Hub")], calls)
+
     def test_command_routes_polite_internet_search_request_without_csv_trigger(self):
         reset_command_state()
         calls = []
@@ -3204,6 +3275,7 @@ class TrinittyRuntimeTests(unittest.TestCase):
 
         self.assertTrue(trinitty.Playback_Stop_Command_Detected("stop"))
         self.assertTrue(trinitty.Playback_Stop_Command_Detected("arrête"))
+        self.assertFalse(trinitty.Playback_Stop_Command_Direct_Detected("stop maintenant"))
 
     def test_playback_stop_command_does_not_treat_pause_as_default_stop_word(self):
         reset_command_state()
@@ -3611,6 +3683,59 @@ class TrinittyRuntimeTests(unittest.TestCase):
             def read(self, frame_length, exception_on_overflow=False):
                 stop_event.set()
                 return b"\xff\x7f" * frame_length
+
+            def close(self):
+                pass
+
+        class FakePyAudio:
+            def open(self, **_kwargs):
+                return FakeStream()
+
+            def terminate(self):
+                pass
+
+        original_vosk = trinitty.vosk
+        original_pyaudio = trinitty.pyaudio
+        original_get_model = trinitty.Get_Vosk_Model
+        trinitty.vosk = SimpleNamespace(KaldiRecognizer=FakeRecognizer)
+        trinitty.pyaudio = SimpleNamespace(PyAudio=lambda: FakePyAudio(), paInt16=8)
+        trinitty.Get_Vosk_Model = lambda: "model"
+        try:
+            self.assertFalse(trinitty.Playback_Interrupt_Local_STT_Listener(stop_event, timeout=1))
+        finally:
+            trinitty.vosk = original_vosk
+            trinitty.pyaudio = original_pyaudio
+            trinitty.Get_Vosk_Model = original_get_model
+
+        self.assertTrue(trinitty.cancel_operation.empty())
+
+    def test_playback_interrupt_local_stt_ignores_weak_false_stop_detection(self):
+        reset_command_state()
+        reset_runtime_queues()
+        trinitty.INTERPRETOR = False
+        stop_event = trinitty.Event()
+        reads = []
+
+        class FakeRecognizer:
+            def __init__(self, *_args):
+                pass
+
+            def AcceptWaveform(self, _pcm):
+                return True
+
+            def Result(self):
+                return '{"text": "stop", "result": [{"word": "stop", "conf": 0.89}]}'
+
+            def FinalResult(self):
+                return "{}"
+
+        class FakeStream:
+            def read(self, frame_length, exception_on_overflow=False):
+                reads.append("read")
+                if len(reads) > 1:
+                    stop_event.set()
+                    return b"\x00\x00" * frame_length
+                return int(991).to_bytes(2, "little", signed=True) * frame_length
 
             def close(self):
                 pass

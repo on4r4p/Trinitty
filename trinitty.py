@@ -969,11 +969,28 @@ def Migrate_User_Config_Defaults(user_conf):
         "RESPONSE_STREAMING_ENABLED = False "
         "# False privilégie une réponse concaténée plus stable"
     )
-    old_playback_interrupt_min_rms_defaults = {350.0, 900.0}
-    new_playback_interrupt_min_rms_default = (
-        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700 "
-        "# Niveau audio minimal pour accepter une commande stop/arrête après comparaison avec le bruit ambiant."
-    )
+    playback_interrupt_generated_defaults = {
+        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS": (
+            {350.0, 700.0, 900.0},
+            "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 1200 "
+            "# Niveau audio minimal pour accepter une commande stop/arrête après comparaison avec le bruit ambiant.",
+        ),
+        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR": (
+            {1400.0},
+            "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 2200 "
+            "# Niveau RMS absolu qui accepte immédiatement une commande stop/arrête si la voix est forte.",
+        ),
+        "PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO": (
+            {2.4},
+            "PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 3.2 "
+            "# Ratio minimal entre la voix détectée et le niveau déjà capté. Augmenter si le haut-parleur déclenche stop.",
+        ),
+        "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE": (
+            {0.85},
+            "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.95 "
+            "# Confiance minimale Vosk pour accepter le mot stop/arrête quand Vosk fournit des scores.",
+        ),
+    }
 
     with open(user_conf) as f:
         lines = f.readlines()
@@ -991,13 +1008,14 @@ def Migrate_User_Config_Defaults(user_conf):
             changed = True
         else:
             key, value = Config_Option_Value(stripped)
-            if key == "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS":
+            if key in playback_interrupt_generated_defaults:
                 try:
                     value_as_float = float(value.split("#", 1)[0].strip())
                 except (AttributeError, TypeError, ValueError):
                     value_as_float = None
-                if value_as_float in old_playback_interrupt_min_rms_defaults:
-                    migrated_lines.append(new_playback_interrupt_min_rms_default + newline)
+                old_values, replacement = playback_interrupt_generated_defaults[key]
+                if value_as_float in old_values:
+                    migrated_lines.append(replacement + newline)
                     changed = True
                     continue
             migrated_lines.append(line)
@@ -1828,7 +1846,7 @@ def Local_Wake_Word_Loop(timeout=None, allowed_functions=None, from_function=Non
         Play_Audio_File(wake_sound)
         return Trinitty("Speech_To_Text")
     if keyword_index == 1:
-        return Prompt(allowed_functions, from_function)
+        return Enter_Interpretor_Mode(allowed_functions, from_function)
     if keyword_index == 2:
         Play_Repeat_Response()
         return Local_Wake_Word_Loop(timeout=timeout, allowed_functions=allowed_functions, from_function=from_function)
@@ -1970,10 +1988,10 @@ PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED = False
 PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête"
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
 PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 1400
-PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 2.4
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.85
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 1200
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 2200
+PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 3.2
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.95
 WAKE_WORD_LOCAL_STT_ENABLED = True
 WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
 WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
@@ -3185,6 +3203,72 @@ def Input_With_Timeout(prompt, timeout=None, audio_paths=None):
         PRINT("\n-Trinitty:Input_With_Timeout:timeout:%s" % timeout)
         return ""
     return sys.stdin.readline()
+
+
+def Interpretor_Mode_Request(text):
+    normalized = Normalize_Help_Command_Text(text)
+    if not normalized:
+        return False
+    tokens = set(normalized.split())
+
+    direct_terms = {
+        "interpreteur",
+        "interpretteur",
+        "l interpreteur",
+        "clavier",
+        "le clavier",
+        "prompt",
+        "le prompt",
+        "invite de commande",
+        "l invite de commande",
+        "invite commande",
+        "saisie clavier",
+        "la saisie clavier",
+        "mode clavier",
+        "le mode clavier",
+    }
+    if normalized in direct_terms:
+        return True
+
+    mode_markers = {"interpreteur", "interpretteur", "clavier", "prompt"}
+    has_mode_marker = bool(tokens.intersection(mode_markers)) or any(
+        phrase in normalized
+        for phrase in ["invite de commande", "invite commande", "saisie clavier", "mode clavier"]
+    )
+    if not has_mode_marker:
+        return False
+
+    request_markers = {
+        "affiche",
+        "afficher",
+        "montre",
+        "montrer",
+        "ouvre",
+        "ouvrir",
+        "lance",
+        "lancer",
+        "active",
+        "activer",
+        "passe",
+        "passer",
+        "bascule",
+        "basculer",
+        "utilise",
+        "utiliser",
+        "peux",
+        "pouvez",
+    }
+    return bool(tokens.intersection(request_markers))
+
+
+def Enter_Interpretor_Mode(allowed_functions=None, from_function=None):
+    global INTERPRETOR
+    global PUSH_TO_TALK
+
+    INTERPRETOR = True
+    PUSH_TO_TALK = False
+    PRINT("\n-Trinitty:Mode interpréteur activé.")
+    return Prompt(allowed_functions, from_function)
 
 
 @contextmanager
@@ -6874,6 +6958,18 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
                 return False
         return Trinitty_Update_Info()
 
+    if (
+        from_function != "Results_Hub"
+        and (allowed_functions is None or "F_prompt" in allowed_functions)
+        and Interpretor_Mode_Request(decoded)
+    ):
+        PRINT("\n-Trinitty:Commandes():direct interpretor mode command.")
+        Runtime_Debug_Event("command", text=decoded[:200], command="F_prompt", direct=True)
+        if CMD_DBG or from_function:
+            return "F_prompt"
+        Enter_Interpretor_Mode()
+        return True
+
     #    filter = ["s'il te plait","si te plait","sil te plait","merci"," stp "]
     #    to_remove = [" fais ","estce"," peux faire "," recherche ","faismoi"," fais ","peux ","fais recherche "," parle ","s'il te plait"," stp "," svp"," sur ","sil plait"]
     #    decoded = SeeknDestroy(filter, decoded)
@@ -6967,7 +7063,10 @@ def Commandes(txt=None,allowed_functions=None,from_function=None):
             return True
 
         if goto == "F_prompt":
-            Prompt()
+            if Interpretor_Mode_Request(decoded):
+                Enter_Interpretor_Mode()
+            else:
+                Prompt()
             return True
         if goto == "F_trinity_help":
             return Trinitty_Help()
@@ -8912,6 +9011,18 @@ def Playback_Stop_Command_Detected(text):
     if not text:
         return False
     normalized = Normalize_Help_Command_Text(text)
+    if Playback_Stop_Command_Direct_Detected(normalized):
+        return True
+    ambiguity = Check_Ambiguity(text, allowed_functions=["F_wait", "F_quit"])
+    if not ambiguity:
+        return False
+    return "F_wait" in ambiguity or "F_quit" in ambiguity
+
+
+def Playback_Stop_Command_Direct_Detected(text):
+    normalized = Normalize_Help_Command_Text(text)
+    if not normalized:
+        return False
     configured_stop_words = {
         Normalize_Help_Command_Text(word)
         for word in Playback_Interrupt_Config_List(
@@ -8931,10 +9042,7 @@ def Playback_Stop_Command_Detected(text):
         "arrêtez",
     } or normalized in configured_stop_words:
         return True
-    ambiguity = Check_Ambiguity(text, allowed_functions=["F_wait", "F_quit"])
-    if not ambiguity:
-        return False
-    return "F_wait" in ambiguity or "F_quit" in ambiguity
+    return False
 
 
 def Playback_Interrupt_Config_List(value):
@@ -9053,20 +9161,20 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
         default=False,
     )
     min_rms = Config_Nonnegative_Float(
-        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS", 700.0),
-        700.0,
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS", 1200.0),
+        1200.0,
     )
     absolute_rms = Config_Nonnegative_Float(
-        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR", 1400.0),
-        1400.0,
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR", 2200.0),
+        2200.0,
     )
     spike_ratio = Config_Nonnegative_Float(
-        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO", 2.4),
-        2.4,
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO", 3.2),
+        3.2,
     )
     min_confidence = Config_Nonnegative_Float(
-        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE", 0.85),
-        0.85,
+        globals().get("PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE", 0.95),
+        0.95,
     )
     deadline = None
     if timeout is not None:
@@ -9137,7 +9245,7 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
                     spike_ratio,
                 )
                 and Playback_Interrupt_Confidence_Accepted(confidence, min_confidence)
-                and Playback_Stop_Command_Detected(text)
+                and Playback_Stop_Command_Direct_Detected(text)
             ):
                 PRINT("\n-Trinitty:Playback interrupt local STT detected:%s" % text)
                 Print_Playback_Interrupt_Reason(text, rms=decision_rms, confidence=confidence)
@@ -9174,7 +9282,7 @@ def Playback_Interrupt_Local_STT_Listener(stop_event, timeout=None):
                     spike_ratio,
                 )
                 and Playback_Interrupt_Confidence_Accepted(confidence, min_confidence)
-                and Playback_Stop_Command_Detected(text)
+                and Playback_Stop_Command_Direct_Detected(text)
             ):
                 Print_Playback_Interrupt_Reason(text, rms=recent_max_rms, confidence=confidence)
                 cancel_operation.put(True)
@@ -9639,7 +9747,7 @@ def Wait(self_launched=False,allowed_functions=None,from_function=None,timeout=N
     if keyword_index is WAIT_TIMEOUT:
         return WAIT_TIMEOUT
     if keyword_index == 1:
-        return Prompt(allowed_functions,from_function)
+        return Enter_Interpretor_Mode(allowed_functions,from_function)
     return None
 
 
@@ -11803,16 +11911,16 @@ def GetConf():
                 PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = Config_Bool(conf, default=False)
 
             elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS":
-                PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = Config_Nonnegative_Float(conf, 700.0)
+                PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = Config_Nonnegative_Float(conf, 1200.0)
 
             elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR":
-                PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = Config_Nonnegative_Float(conf, 1400.0)
+                PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = Config_Nonnegative_Float(conf, 2200.0)
 
             elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO":
-                PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = Config_Nonnegative_Float(conf, 2.4)
+                PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = Config_Nonnegative_Float(conf, 3.2)
 
             elif option == "PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE":
-                PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = Config_Nonnegative_Float(conf, 0.85)
+                PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = Config_Nonnegative_Float(conf, 0.95)
 
             elif option == "WAIT_FOR_TIMEOUT":
                 WAIT_FOR_TIMEOUT = Config_Positive_Float(conf, 30.0)
@@ -12142,10 +12250,10 @@ PLAYBACK_INTERRUPT_STT_FALLBACK_ENABLED = False # True: autorise le fallback STT
 PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = stop,arrete,arrête # Mots/phrases d'arrêt séparés par virgule.
 PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25 # Taille des petits blocs audio analysés par Vosk.
 PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False # True: autorise les résultats partiels Vosk.
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700 # Niveau audio minimal pour accepter une commande stop/arrête après comparaison avec le bruit ambiant.
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 1400 # Niveau RMS absolu qui accepte immédiatement une commande stop/arrête.
-PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 2.4 # Ratio minimal entre la voix détectée et le niveau déjà capté.
-PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.85 # Confiance minimale Vosk si les scores de mots sont disponibles.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 1200 # Niveau audio minimal pour accepter une commande stop/arrête après comparaison avec le bruit ambiant.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 2200 # Niveau RMS absolu qui accepte immédiatement une commande stop/arrête.
+PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 3.2 # Ratio minimal entre la voix détectée et le niveau déjà capté.
+PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.95 # Confiance minimale Vosk si les scores de mots sont disponibles.
 COMMAND_CLASSIFIER_ENABLED = False # True: utiliser le classifieur TensorFlow optionnel.
 COMMAND_CLASSIFIER_THRESHOLD = 0.65 # Score minimal du classifieur pour accepter une commande.
 COMMAND_CLASSIFIER_MODEL_PATH = datas/command_classifier.keras
@@ -12378,10 +12486,10 @@ if __name__ == "__main__":
     PLAYBACK_INTERRUPT_LOCAL_STT_WORDS = "stop,arrete,arrête"
     PLAYBACK_INTERRUPT_LOCAL_STT_CHUNK_SECONDS = 0.25
     PLAYBACK_INTERRUPT_LOCAL_STT_PARTIAL_ENABLED = False
-    PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 700
-    PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 1400
-    PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 2.4
-    PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.85
+    PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS = 1200
+    PLAYBACK_INTERRUPT_LOCAL_STT_MIN_RMS_FLOOR = 2200
+    PLAYBACK_INTERRUPT_LOCAL_STT_RMS_SPIKE_RATIO = 3.2
+    PLAYBACK_INTERRUPT_LOCAL_STT_MIN_CONFIDENCE = 0.95
     WAKE_WORD_LOCAL_STT_ENABLED = True
     WAKE_WORD_LOCAL_STT_WORDS = "trinitty,trinity,interpréteur,interpreteur,répète,repete,merci"
     WAKE_WORD_LOCAL_STT_CHUNK_SECONDS = 0.5
